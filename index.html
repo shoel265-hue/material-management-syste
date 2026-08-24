@@ -564,7 +564,7 @@
                 print-color-adjust: exact !important;
             }
 
-            .dashboard-cards { grid-template-columns: repeat(3, 1fr) !important; gap: 10px !important; margin-bottom: 20px !important; }
+            .dashboard-cards { grid-template-columns: repeat(3, 1fr) !important; gap: 10mm !important; margin-bottom: 20px !important; }
             .card { padding: 10px !important; border: 1px solid #ccc !important; background-color: #f9f9f9 !important; break-inside: avoid !important; }
             .card span { font-size: 18pt !important; margin-top: 5px !important; }
             
@@ -1058,6 +1058,31 @@
         } else {
             document.getElementById('login-overlay').style.display = 'flex';
             document.getElementById('sys-pass-input').focus();
+        }
+
+        // 💡 포털에서 전달된 팀 파라미터(?team=소방팀 등) 자동 반영 로직
+        const urlParams = new URLSearchParams(window.location.search);
+        const teamParam = urlParams.get('team');
+        if (teamParam) {
+            currentTeam = teamParam;
+            const teamSelectEl = document.getElementById('current-team-select');
+            if (teamSelectEl) teamSelectEl.value = teamParam;
+            
+            const badgeText = currentTeam === 'ALL' ? '전체 보기' : `${currentTeam} 전용`;
+            ['dash-team-badge','inv-team-badge','hist-team-badge','period-team-badge'].forEach(id => {
+                const el = document.getElementById(id);
+                if(el) el.innerText = badgeText;
+            });
+            
+            const isAll = (currentTeam === 'ALL');
+            const tFilter = document.getElementById('admin-team-filter-container');
+            const hFilter = document.getElementById('admin-history-filter-container');
+            const pFilter = document.getElementById('admin-period-filter-wrap');
+            if (tFilter) tFilter.style.display = isAll ? 'flex' : 'none';
+            if (hFilter) hFilter.style.display = isAll ? 'flex' : 'none';
+            if (pFilter) pFilter.style.display = isAll ? 'inline-block' : 'none';
+
+            renderApp();
         }
     });
 
@@ -1673,9 +1698,12 @@
         if (selectAllCb) selectAllCb.checked = false;
         
         const isAll = (currentTeam === 'ALL');
-        document.getElementById('admin-team-filter-container').style.display = isAll ? 'flex' : 'none';
-        document.getElementById('admin-history-filter-container').style.display = isAll ? 'flex' : 'none';
-        document.getElementById('admin-period-filter-wrap').style.display = isAll ? 'inline-block' : 'none';
+        const tFilter = document.getElementById('admin-team-filter-container');
+        const hFilter = document.getElementById('admin-history-filter-container');
+        const pFilter = document.getElementById('admin-period-filter-wrap');
+        if (tFilter) tFilter.style.display = isAll ? 'flex' : 'none';
+        if (hFilter) hFilter.style.display = isAll ? 'flex' : 'none';
+        if (pFilter) pFilter.style.display = isAll ? 'inline-block' : 'none';
         
         clearHistoryFilter();
         renderApp();
@@ -2444,15 +2472,6 @@
             renderPeriodSearch();
         }
     }
-
-    if (currentTeam === 'ALL') {
-        const hFilter = document.getElementById('admin-history-filter-container');
-        const pFilter = document.getElementById('admin-period-filter-wrap');
-        if (hFilter) hFilter.style.display = 'flex';
-        if (pFilter) pFilter.style.display = 'inline-block';
-    }
-
-    renderApp();
 </script>
 </body>
 </html>
