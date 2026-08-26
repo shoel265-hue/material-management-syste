@@ -1804,7 +1804,6 @@
         alert(`✅ 자재명이 [${trimmedName}](으)로 수정되었습니다.`);
     }
 
-    // 💡 단위 수정 함수 추가
     async function editItemUnit(itemCode, currentUnit) {
         if (isReadOnlyHistoryMode) {
             alert('⚠️ 과거 백업 조회 모드에서는 수정이 차단됩니다.');
@@ -1834,7 +1833,6 @@
         alert(`✅ 단위가 [${trimmedUnit}](으)로 수정되었습니다.`);
     }
 
-    // 💡 품목코드 정렬 토글 함수 추가
     function toggleCodeSort() {
         codeSortAsc = !codeSortAsc;
         renderApp();
@@ -2014,13 +2012,17 @@
         if (!tbody) return;
         tbody.innerHTML = '';
 
-        if (deletedHistoryLogs.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="9" style="color:#94a3b8; padding:30px;">삭제된 이력이 없습니다.</td></tr>';
+        let targetDeletedLogs = deletedHistoryLogs;
+        if (currentTeam !== 'ALL') {
+            targetDeletedLogs = deletedHistoryLogs.filter(h => h.team === currentTeam);
+        }
+
+        if (targetDeletedLogs.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="9" style="color:#94a3b8; padding:30px;">[${currentTeam === 'ALL' ? '전체' : currentTeam}] 삭제된 이력이 없습니다.</td></tr>`;
             return;
         }
 
-        // 💡 복원 모달 리스트 순서: 맨 아래 위치하도록 원래 순서(또는 정방향)로 렌더링
-        deletedHistoryLogs.forEach(h => {
+        targetDeletedLogs.forEach(h => {
             const tr = document.createElement('tr');
             let badge = '';
             if (h.type === 'in') badge = '<span class="badge-in">입고</span>';
@@ -2121,13 +2123,17 @@
         if (!tbody) return;
         tbody.innerHTML = '';
 
-        if (deletedInventoryItems.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="8" style="color:#94a3b8; padding:30px;">삭제된 자재가 없습니다.</td></tr>';
+        let targetDeletedInv = deletedInventoryItems;
+        if (currentTeam !== 'ALL') {
+            targetDeletedInv = deletedInventoryItems.filter(item => item.team === currentTeam);
+        }
+
+        if (targetDeletedInv.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="8" style="color:#94a3b8; padding:30px;">[${currentTeam === 'ALL' ? '전체' : currentTeam}] 삭제된 자재가 없습니다.</td></tr>`;
             return;
         }
 
-        // 💡 자재 복원 모달 순서: 맨 아래 위치하도록 원래 순서로 렌더링
-        deletedInventoryItems.forEach(item => {
+        targetDeletedInv.forEach(item => {
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td class="checkbox-cell"><input type="checkbox" class="row-checkbox inv-restore-checkbox" value="${item.code}"></td>
@@ -2153,7 +2159,7 @@
 
         const codes = Array.from(chks).map(cb => cb.value);
 
-        if (confirm(`선택한 ${codes.length}개의 자재를 복원하시겠습니까?`)) {
+        if (confirm(`선택한 ${codes.length}개의 자재와 관련된 입출고 내역을 함께 복원하시겠습니까?`)) {
             codes.forEach(code => {
                 const idx = deletedInventoryItems.findIndex(i => i.code === code);
                 if (idx > -1) {
@@ -2161,10 +2167,17 @@
                     delete item.deletedAt;
                     inventory.push(item);
                     deletedInventoryItems.splice(idx, 1);
+
+                    const matchingDeletedLogs = deletedHistoryLogs.filter(h => h.code === code);
+                    matchingDeletedLogs.forEach(log => {
+                        delete log.deletedAt;
+                        historyLogs.push(log);
+                    });
+                    deletedHistoryLogs = deletedHistoryLogs.filter(h => h.code !== code);
                 }
             });
 
-            alert(`${codes.length}개의 자재가 목록으로 복원되었습니다.`);
+            alert(`${codes.length}개의 자재 및 관련 입출고 내역이 목록으로 복원되었습니다.`);
             await saveData();
             renderApp();
             renderInvRestoreModal();
@@ -2221,7 +2234,6 @@
         const query = document.getElementById('inventory-search')?.value.toLowerCase().trim() || '';
         if (query) filtered = filtered.filter(item => item.name.toLowerCase().includes(query) || item.code.toLowerCase().includes(query));
 
-        // 💡 품목코드 정렬 적용
         filtered.sort((a, b) => {
             if (codeSortAsc) {
                 return a.code.localeCompare(b.code);
@@ -2474,7 +2486,7 @@
         }
         const chks = document.querySelectorAll('.item-checkbox:checked');
         if (chks.length === 0) { alert('삭제할 자재를 선택해 주세요.'); return; }
-        if (confirm(`선택한 ${chks.length}개의 자재를 삭제하시겠습니까?`)) {
+        if (confirm(`선택한 ${chks.length}개의 자재와 관련된 입출고 내역을 함께 삭제하시겠습니까?`)) {
             const codes = Array.from(chks).map(cb => cb.value);
             const nowTime = new Date().toLocaleString('ko-KR');
             
@@ -2487,7 +2499,16 @@
                 return true;
             });
 
-            alert(`${chks.length}개 자재 삭제 완료.`); 
+            historyLogs = historyLogs.filter(h => {
+                if (codes.includes(h.code)) {
+                    h.deletedAt = nowTime;
+                    deletedHistoryLogs.push(h);
+                    return false;
+                }
+                return true;
+            });
+
+            alert(`${chks.length}개 자재 및 관련 이력이 삭제 보관함으로 이동되었습니다.`); 
             await saveData();
             const sAll = document.getElementById('selectAllCheckbox'); 
             if (sAll) sAll.checked = false;
@@ -2500,16 +2521,27 @@
             alert('⚠️ 과거 백업 조회 모드에서는 삭제가 차단됩니다.');
             return;
         }
-        if (confirm(`[${name}] 자재를 삭제하시겠습니까?`)) {
+        if (confirm(`[${name}] 자재와 관련된 입출고 내역을 함께 삭제하시겠습니까?`)) {
             const idx = inventory.findIndex(i => i.code === code);
             if (idx > -1) {
                 const deletedObj = inventory[idx];
                 deletedObj.deletedAt = new Date().toLocaleString('ko-KR');
                 deletedInventoryItems.push(deletedObj);
                 inventory.splice(idx, 1);
+
+                const nowTime = new Date().toLocaleString('ko-KR');
+                historyLogs = historyLogs.filter(h => {
+                    if (h.code === code) {
+                        h.deletedAt = nowTime;
+                        deletedHistoryLogs.push(h);
+                        return false;
+                    }
+                    return true;
+                });
+
                 await saveData(); 
                 renderApp();
-                alert(`[${name}] 자재가 삭제 보관함으로 이동되었습니다.`);
+                alert(`[${name}] 자재 및 관련 이력이 삭제 보관함으로 이동되었습니다.`);
             }
         }
     }
