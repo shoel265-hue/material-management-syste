@@ -678,7 +678,7 @@
             <div class="excel-guide-box">
                 💡 <strong>안전한 자재목록 엑셀 일괄 업로드 방법:</strong><br>
                 상단의 <strong>[👤 접속 팀]</strong>을 먼저 맞춘 후 <strong>[📊 자재목록 엑셀 업로드]</strong> 버튼을 누르면 업로드되는 자재가 모두 선택하신 팀으로 안전하게 연동됩니다. (예: 소방팀)<br>
-                💡 <strong>자재명/단위 수정 안내:</strong> 자재명이나 단위를 <strong>더블클릭(Double Click)</strong>하거나 수정 버튼을 통해 언제든지 내용을 수정할 수 있습니다.
+                💡 <strong>품목코드/자재명/단위 수정 안내:</strong> 품목코드, 자재명, 단위를 <strong>더블클릭(Double Click)</strong>하거나 수정 버튼을 통해 언제든지 내용을 수정할 수 있습니다.
             </div>
 
             <!-- 자재 목록 팀 필터 -->
@@ -723,8 +723,8 @@
                         <th class="checkbox-cell">
                             <input type="checkbox" id="selectAllCheckbox" class="row-checkbox" onclick="toggleAllCheckboxes(this)" title="전체 선택">
                         </th>
-                        <th>담당 팀</th>
-                        <th>
+                        <th style="width: 100px;">담당 팀</th>
+                        <th style="width: 160px;">
                             품목코드 
                             <button onclick="toggleCodeSort()" style="background:#e2e8f0; border:1px solid #cbd5e1; border-radius:4px; padding:2px 6px; font-size:11px; cursor:pointer; margin-left:4px;" title="품목코드 정렬 전환">정렬↕</button>
                         </th>
@@ -1117,10 +1117,10 @@
                 const data = doc.data();
                 isUpdatingFromRemote = true;
 
-                inventory = data.inventory || [];
-                historyLogs = data.historyLogs || [];
-                deletedHistoryLogs = data.deletedHistoryLogs || [];
-                deletedInventoryItems = data.deletedInventoryItems || [];
+                inventory = Array.isArray(data.inventory) ? data.inventory : [];
+                historyLogs = Array.isArray(data.historyLogs) ? data.historyLogs : [];
+                deletedHistoryLogs = Array.isArray(data.deletedHistoryLogs) ? data.deletedHistoryLogs : [];
+                deletedInventoryItems = Array.isArray(data.deletedInventoryItems) ? data.deletedInventoryItems : [];
 
                 localStorage.setItem('my_inventory_data_v2', JSON.stringify(inventory));
                 localStorage.setItem('my_inventory_history_v2', JSON.stringify(historyLogs));
@@ -1159,6 +1159,12 @@
         if (isReadOnlyHistoryMode) return;
         try {
             syncCurrentStockLogs(); 
+            
+            if (!Array.isArray(inventory)) inventory = [];
+            if (!Array.isArray(historyLogs)) historyLogs = [];
+            if (!Array.isArray(deletedHistoryLogs)) deletedHistoryLogs = [];
+            if (!Array.isArray(deletedInventoryItems)) deletedInventoryItems = [];
+
             localStorage.setItem('my_inventory_data_v2', JSON.stringify(inventory));
             localStorage.setItem('my_inventory_history_v2', JSON.stringify(historyLogs));
             localStorage.setItem('my_deleted_history_v2', JSON.stringify(deletedHistoryLogs));
@@ -1330,6 +1336,7 @@
         URL.revokeObjectURL(url);
     }
 
+    // 💡 [개선된 품목코드 자동 생성 함수]: 중간에 영구삭제로 빈 번호가 생기면 그 번호를 재사용하고, 중복을 완벽히 방지합니다.
     function getNextItemCode(team) {
         let prefix = 'ITEM';
         if (team.includes('전기')) prefix = 'ELEC';
@@ -1341,21 +1348,32 @@
         else if (team.includes('운송')) prefix = 'TRN';
         else if (team.includes('미화') || team.includes('청소')) prefix = 'CLN';
 
-        let maxNum = 0;
-        const checkCode = (codeStr) => {
+        // 해당 팀에서 이미 사용 중이거나 존재하는 모든 번호 수집 (현재 목록 + 삭제 보관함 전체 체크)
+        const usedNumbers = new Set();
+        
+        const collectNums = (codeStr) => {
             if (codeStr && codeStr.startsWith(prefix + '-')) {
-                const numPart = parseInt(codeStr.replace(prefix + '-', ''));
-                if (!isNaN(numPart) && numPart > maxNum) {
-                    maxNum = numPart;
+                const numPart = parseInt(codeStr.replace(prefix + '-', ''), 10);
+                if (!isNaN(numPart)) {
+                    usedNumbers.add(numPart);
                 }
             }
         };
 
-        inventory.forEach(i => checkCode(i.code));
-        deletedInventoryItems.forEach(i => checkCode(i.code));
+        inventory.forEach(i => {
+            if (i.team === team) collectNums(i.code);
+        });
+        deletedInventoryItems.forEach(i => {
+            if (i.team === team) collectNums(i.code);
+        });
 
-        const nextNum = String(maxNum + 1).padStart(3, '0');
-        return `${prefix}-${nextNum}`;
+        // 1부터 시작하여 빠져 있는(비어 있는) 가장 작은 번호 찾기
+        let targetNum = 1;
+        while (usedNumbers.has(targetNum)) {
+            targetNum++;
+        }
+
+        return `${prefix}-${String(targetNum).padStart(3, '0')}`;
     }
 
     async function addNewItem() {
@@ -1374,11 +1392,12 @@
         const name = prompt(`[${team}] 추가할 자재명을 입력하세요:`);
         if (!name || !name.trim()) return;
 
-        const codeInput = prompt(`품목코드를 확인/수정하세요:`, autoCode);
+        const codeInput = prompt(`품목코드를 확인/수정하세요 (중복 불가):`, autoCode);
         const code = codeInput ? codeInput.trim() : autoCode;
 
+        // 💡 중복 코드 완벽 방지 체크
         if (inventory.some(i => i.code === code)) {
-            alert(`이미 존재하는 품목코드(${code})입니다. 다른 코드로 입력해주세요.`);
+            alert(`⚠️ 이미 존재하는 품목코드(${code})입니다. 중복된 코드는 등록할 수 없습니다.`);
             return;
         }
 
@@ -1492,9 +1511,11 @@
 
                     let team = rowData['담당팀'] || rowData['팀'] || defaultTeam;
                     let code = String(rowData['품목코드'] || rowData['코드'] || '').trim();
-                    let no = String(rowData['NO'] || rowData['No'] || '').replace(/[^0-9]/g, '');
                     
-                    if (!code) code = no ? `${teamPrefix}-${String(no).padStart(3, '0')}` : `${teamPrefix}-R${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+                    // 💡 엑셀 업로드 시 코드가 없으면 자동 채번 함수 활용하여 빈 번호 재사용
+                    if (!code) {
+                        code = getNextItemCode(team);
+                    }
 
                     let unit = String(rowData['단위'] || '개').trim();
                     if (!unit || unit === 'undefined' || unit === 'nan') unit = '개';
@@ -1775,6 +1796,53 @@
         renderApp();
     }
 
+    async function editItemCode(oldCode) {
+        if (isReadOnlyHistoryMode) {
+            alert('⚠️ 과거 백업 조회 모드에서는 수정이 차단됩니다.');
+            return;
+        }
+        const newCode = prompt(`품목코드 수정 (${oldCode}):`, oldCode);
+        if (newCode === null) return;
+        const trimmedCode = newCode.trim();
+        if (!trimmedCode) {
+            alert('품목코드는 공백일 수 없습니다.');
+            return;
+        }
+
+        // 💡 품목코드 수정 시 중복 방지 검증
+        if (trimmedCode !== oldCode && inventory.some(i => i.code === trimmedCode)) {
+            alert(`⚠️ 이미 존재하는 품목코드(${trimmedCode})입니다. 중복 코드로 수정할 수 없습니다.`);
+            return;
+        }
+
+        const item = inventory.find(i => i.code === oldCode);
+        if (item) {
+            item.code = trimmedCode;
+        }
+
+        historyLogs.forEach(h => {
+            if (h.code === oldCode) {
+                h.code = trimmedCode;
+            }
+        });
+
+        deletedInventoryItems.forEach(i => {
+            if (i.code === oldCode) {
+                i.code = trimmedCode;
+            }
+        });
+
+        deletedHistoryLogs.forEach(h => {
+            if (h.code === oldCode) {
+                h.code = trimmedCode;
+            }
+        });
+
+        await saveData();
+        renderApp();
+        alert(`✅ 품목코드가 [${trimmedCode}](으)로 수정되었습니다.`);
+    }
+
     async function editItemName(itemCode, currentName) {
         if (isReadOnlyHistoryMode) {
             alert('⚠️ 과거 백업 조회 모드에서는 수정이 차단됩니다.');
@@ -1898,6 +1966,7 @@
         if (oldInvIdx > -1) {
             if (oldType === 'in') inventory[oldInvIdx].qty -= oldQty;
             else if (oldType === 'out') inventory[oldInvIdx].qty += oldQty;
+            if (inventory[oldInvIdx].qty < 0) inventory[oldInvIdx].qty = 0;
         }
 
         log.date = newDate.trim();
@@ -1915,11 +1984,20 @@
 
             if (inventory[newInvIdx].qty < 0) inventory[newInvIdx].qty = 0;
             inventory[newInvIdx].name = log.name;
+        } else {
+            inventory.push({
+                team: log.team || currentTeam,
+                code: log.code,
+                name: log.name,
+                unit: log.unit || '개',
+                qty: log.type === 'in' ? log.qty : (log.type === 'current' ? log.qty : 0),
+                safeQty: 5
+            });
         }
 
         await saveData();
         renderApp();
-        alert("✅ 입출고 내역이 성공적으로 수정되었습니다.");
+        alert("✅ 입출고 내역이 안전하게 수정되었습니다.");
     }
 
     function clearHistoryFilter() {
@@ -2254,7 +2332,14 @@
                 tr.innerHTML = `
                     <td class="checkbox-cell"><input type="checkbox" class="row-checkbox item-checkbox" value="${item.code}"></td>
                     <td><span style="font-weight:bold; color:#475569;">${item.team}</span></td>
-                    <td>${item.code}</td>
+                    <td style="text-align:center; width: 160px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                            <div style="flex-grow: 1; text-align: center;">
+                                <span ondblclick="editItemCode('${item.code}')" title="더블클릭 시 품목코드 수정" style="cursor:pointer;">${item.code}</span>
+                            </div>
+                            <button class="btn-action" style="padding: 2px 6px; font-size: 11px; background-color: #64748b; color: white; flex-shrink: 0;" onclick="editItemCode('${item.code}')" title="품목코드 수정">수정</button>
+                        </div>
+                    </td>
                     <td style="text-align:center;">
                         <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                             <div style="flex-grow: 1; text-align: center;">
