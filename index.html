@@ -1336,8 +1336,8 @@
         URL.revokeObjectURL(url);
     }
 
-    // 💡 [개선된 품목코드 자동 생성 함수]: 중간에 영구삭제로 빈 번호가 생기면 그 번호를 재사용하고, 중복을 완벽히 방지합니다.
-    function getNextItemCode(team) {
+    // 💡 [개선된 품목코드 자동 생성 함수]: 추가되는 임시 세트 코드를 포함하여 중복 방지 및 빈 번호 재사용
+    function getNextItemCode(team, extraUsedCodes = new Set()) {
         let prefix = 'ITEM';
         if (team.includes('전기')) prefix = 'ELEC';
         else if (team.includes('소방')) prefix = 'FIRE';
@@ -1348,7 +1348,6 @@
         else if (team.includes('운송')) prefix = 'TRN';
         else if (team.includes('미화') || team.includes('청소')) prefix = 'CLN';
 
-        // 해당 팀에서 이미 사용 중이거나 존재하는 모든 번호 수집 (현재 목록 + 삭제 보관함 전체 체크)
         const usedNumbers = new Set();
         
         const collectNums = (codeStr) => {
@@ -1366,8 +1365,15 @@
         deletedInventoryItems.forEach(i => {
             if (i.team === team) collectNums(i.code);
         });
+        extraUsedCodes.forEach(codeStr => {
+            if (codeStr && codeStr.startsWith(prefix + '-')) {
+                const numPart = parseInt(codeStr.replace(prefix + '-', ''), 10);
+                if (!isNaN(numPart)) {
+                    usedNumbers.add(numPart);
+                }
+            }
+        });
 
-        // 1부터 시작하여 빠져 있는(비어 있는) 가장 작은 번호 찾기
         let targetNum = 1;
         while (usedNumbers.has(targetNum)) {
             targetNum++;
@@ -1395,7 +1401,6 @@
         const codeInput = prompt(`품목코드를 확인/수정하세요 (중복 불가):`, autoCode);
         const code = codeInput ? codeInput.trim() : autoCode;
 
-        // 💡 중복 코드 완벽 방지 체크
         if (inventory.some(i => i.code === code)) {
             alert(`⚠️ 이미 존재하는 품목코드(${code})입니다. 중복된 코드는 등록할 수 없습니다.`);
             return;
@@ -1485,15 +1490,7 @@
                 let addedCount = 0;
                 let updatedCount = 0;
                 let todayDate = new Date().toISOString().split('T')[0];
-                let teamPrefix = 'ITEM';
-                if (defaultTeam.includes('전기')) teamPrefix = 'ELEC';
-                else if (defaultTeam.includes('소방')) teamPrefix = 'FIRE';
-                else if (defaultTeam.includes('설비')) teamPrefix = 'FAC';
-                else if (defaultTeam.includes('건축') || defaultTeam.includes('건설')) teamPrefix = 'BLD';
-                else if (defaultTeam.includes('점검')) teamPrefix = 'INSP';
-                else if (defaultTeam.includes('냉동')) teamPrefix = 'REF';
-                else if (defaultTeam.includes('운송')) teamPrefix = 'TRN';
-                else if (defaultTeam.includes('미화') || defaultTeam.includes('청소')) teamPrefix = 'CLN';
+                let sessionUsedCodes = new Set(); // 업로드 루프 내 채번 충돌 방지용 세트
 
                 for (let i = headerRowIndex + 1; i < rows.length; i++) {
                     const row = rows[i];
@@ -1512,10 +1509,10 @@
                     let team = rowData['담당팀'] || rowData['팀'] || defaultTeam;
                     let code = String(rowData['품목코드'] || rowData['코드'] || '').trim();
                     
-                    // 💡 엑셀 업로드 시 코드가 없으면 자동 채번 함수 활용하여 빈 번호 재사용
                     if (!code) {
-                        code = getNextItemCode(team);
+                        code = getNextItemCode(team, sessionUsedCodes);
                     }
+                    sessionUsedCodes.add(code);
 
                     let unit = String(rowData['단위'] || '개').trim();
                     if (!unit || unit === 'undefined' || unit === 'nan') unit = '개';
@@ -1809,7 +1806,6 @@
             return;
         }
 
-        // 💡 품목코드 수정 시 중복 방지 검증
         if (trimmedCode !== oldCode && inventory.some(i => i.code === trimmedCode)) {
             alert(`⚠️ 이미 존재하는 품목코드(${trimmedCode})입니다. 중복 코드로 수정할 수 없습니다.`);
             return;
@@ -1906,6 +1902,7 @@
         renderApp();
     }
 
+    // 💡 [수정 완료]: 입출고 내역 수정 시 기존 수량 역산 오류(입고 시 차감, 출고 시 가산)를 올바르게 수정함
     async function editHistoryItem(id) {
         if (isReadOnlyHistoryMode) {
             alert('⚠️ 과거 백업 조회 모드에서는 수정이 차단됩니다.');
@@ -1962,6 +1959,7 @@
         const newWorker = prompt("작업자/비고 내용을 입력하세요:", log.worker || '');
         if (newWorker === null) return;
 
+        // 💡 수정 전 기존 재고 역산 원복 (입고였으면 빼고, 출고였으면 더함)
         const oldInvIdx = inventory.findIndex(i => i.code === oldCode);
         if (oldInvIdx > -1) {
             if (oldType === 'in') inventory[oldInvIdx].qty -= oldQty;
@@ -2309,6 +2307,7 @@
             filtered = inventory.filter(item => item.team === currentTeam);
         }
 
+        // 💡 검색어 공백 및 대소문자 예외 처리 강화 (.trim().toLowerCase())
         const query = document.getElementById('inventory-search')?.value.toLowerCase().trim() || '';
         if (query) filtered = filtered.filter(item => item.name.toLowerCase().includes(query) || item.code.toLowerCase().includes(query));
 
@@ -2438,6 +2437,7 @@
             filtered = filtered.filter(h => h.code === selectedHistoryCode);
         }
 
+        // 💡 검색어 공백 및 대소문자 예외 처리 강화
         const query = document.getElementById('history-search')?.value.toLowerCase().trim() || '';
         if (query) {
             filtered = filtered.filter(h => h.name.toLowerCase().includes(query) || h.code.toLowerCase().includes(query) || (h.worker && h.worker.toLowerCase().includes(query)));
@@ -2514,6 +2514,7 @@
         const startDate = document.getElementById('search-start-date')?.value;
         const endDate = document.getElementById('search-end-date')?.value;
         const periodType = document.getElementById('search-period-type')?.value || 'all';
+        // 💡 검색어 공백 및 대소문자 예외 처리 강화
         const keyword = document.getElementById('search-period-keyword')?.value.toLowerCase().trim() || '';
 
         if (startDate) {
