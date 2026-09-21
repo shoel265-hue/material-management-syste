@@ -774,7 +774,7 @@
             </div>
 
             <div class="quick-transaction-bar">
-                <div style="font-weight: bold; color: #0f172a; margin-bottom: 2px;">⚡ 입출고 등록</div>
+                <div style="font-weight: bold; color: #0f172a; margin-bottom: 2px;">⚡ 입출고 등록 (소수점 입력 가능)</div>
                 <div class="quick-row">
                     <input type="date" id="quick-trans-date" class="quick-input-balanced" style="width: 145px;">
                     <select id="quick-trans-item" class="quick-input-balanced" style="flex-grow: 2; min-width: 200px;">
@@ -783,7 +783,7 @@
                         <option value="in">입고 (+)</option>
                         <option value="out" selected>출고 (-)</option>
                     </select>
-                    <input type="number" id="quick-trans-qty" class="quick-input-balanced" min="1" value="1" style="width: 90px;" placeholder="수량">
+                    <input type="number" id="quick-trans-qty" class="quick-input-balanced" step="any" min="0" value="1" style="width: 100px;" placeholder="수량">
                 </div>
                 <div class="quick-row">
                     <input type="text" id="quick-trans-worker" class="quick-input-balanced" style="flex-grow: 1; min-width: 250px;" placeholder="작업자/사용처 입력">
@@ -1336,7 +1336,6 @@
         URL.revokeObjectURL(url);
     }
 
-    // 💡 [개선된 품목코드 자동 생성 함수]: 추가되는 임시 세트 코드를 포함하여 중복 방지 및 빈 번호 재사용
     function getNextItemCode(team, extraUsedCodes = new Set()) {
         let prefix = 'ITEM';
         if (team.includes('전기')) prefix = 'ELEC';
@@ -1406,11 +1405,11 @@
             return;
         }
 
-        const unit = prompt("단위를 입력하세요:", "개") || "개";
-        const qtyInput = prompt("현재 재고 수량을 입력하세요:", "0");
-        const qty = parseInt(qtyInput) || 0;
+        const unit = prompt("단위를 입력하세요 (예: 개, kg, L, 봉):", "개") || "개";
+        const qtyInput = prompt("현재 재고 수량을 입력하세요 (소수점 가능):", "0");
+        const qty = parseFloat(qtyInput) || 0;
         const safeQtyInput = prompt("안전 재고 수량을 입력하세요:", "5");
-        const safeQty = parseInt(safeQtyInput) || 5;
+        const safeQty = parseFloat(safeQtyInput) || 5;
 
         inventory.push({ team, code, name: name.trim(), unit: unit.trim(), qty, safeQty });
 
@@ -1490,7 +1489,7 @@
                 let addedCount = 0;
                 let updatedCount = 0;
                 let todayDate = new Date().toISOString().split('T')[0];
-                let sessionUsedCodes = new Set(); // 업로드 루프 내 채번 충돌 방지용 세트
+                let sessionUsedCodes = new Set();
 
                 for (let i = headerRowIndex + 1; i < rows.length; i++) {
                     const row = rows[i];
@@ -1518,8 +1517,8 @@
                     if (!unit || unit === 'undefined' || unit === 'nan') unit = '개';
 
                     let qtyRaw = rowData['현재재고'] || rowData['재고현황'] || rowData['재고'] || rowData['수량'] || 0;
-                    let qty = parseInt(String(qtyRaw).replace(/[^0-9-]/g, '')) || 0;
-                    let safeQty = parseInt(String(rowData['안전재고'] || 5).replace(/[^0-9-]/g, '')) || 5;
+                    let qty = parseFloat(String(qtyRaw).replace(/[^0-9.-]/g, '')) || 0;
+                    let safeQty = parseFloat(String(rowData['안전재고'] || 5).replace(/[^0-9.-]/g, '')) || 5;
 
                     const existingIndex = inventory.findIndex(item => item.code === code);
                     if (existingIndex > -1) {
@@ -1626,9 +1625,9 @@
                         if(note && worker) worker += ` (${note})`;
                         else if (note) worker = note;
 
-                        let inQty = parseInt(String(rowData['입고']).replace(/[^0-9]/g, '')) || 0;
-                        let outQty = parseInt(String(rowData['출고']).replace(/[^0-9]/g, '')) || 0;
-                        let singleQty = parseInt(String(rowData['수량']).replace(/[^0-9]/g, '')) || 0;
+                        let inQty = parseFloat(String(rowData['입고']).replace(/[^0-9.-]/g, '')) || 0;
+                        let outQty = parseFloat(String(rowData['출고']).replace(/[^0-9.-]/g, '')) || 0;
+                        let singleQty = parseFloat(String(rowData['수량']).replace(/[^0-9.-]/g, '')) || 0;
                         let typeRaw = String(rowData['구분'] || rowData['입출고'] || '').trim();
 
                         const pushLogIfUnique = (logObj) => {
@@ -1738,7 +1737,7 @@
         const date = document.getElementById('quick-trans-date').value || new Date().toISOString().split('T')[0];
         const type = document.getElementById('quick-trans-type').value;
         const itemCode = document.getElementById('quick-trans-item').value;
-        const qty = parseInt(document.getElementById('quick-trans-qty').value);
+        const qty = parseFloat(document.getElementById('quick-trans-qty').value);
         const worker = document.getElementById('quick-trans-worker').value;
 
         if (!itemCode || isNaN(qty) || qty <= 0) {
@@ -1759,6 +1758,9 @@
             } else if (type === 'out') {
                 item.qty -= qty;
             }
+
+            // 소수점 연산 오차 방지 (소수점 3자리까지 반올림)
+            item.qty = Math.round(item.qty * 1000) / 1000;
 
             historyLogs.push({
                 id: 'hist_' + Date.now() + '_' + Math.floor(Math.random() * 10000),
@@ -1873,7 +1875,7 @@
             alert('⚠️ 과거 백업 조회 모드에서는 수정이 차단됩니다.');
             return;
         }
-        const newUnit = prompt(`단위 수정 (${itemCode}):`, currentUnit);
+        const newUnit = prompt(`단위 수정 (${itemCode}) [예: 개, kg, L, 봉]:`, currentUnit);
         if (newUnit === null) return;
         const trimmedUnit = newUnit.trim();
         if (!trimmedUnit) {
@@ -1902,7 +1904,6 @@
         renderApp();
     }
 
-    // 💡 [수정 완료]: 입출고 내역 수정 시 기존 수량 역산 오류(입고 시 차감, 출고 시 가산)를 올바르게 수정함
     async function editHistoryItem(id) {
         if (isReadOnlyHistoryMode) {
             alert('⚠️ 과거 백업 조회 모드에서는 수정이 차단됩니다.');
@@ -1948,9 +1949,9 @@
         if (newName === null) return;
         if (!newName.trim()) { alert("자재명은 필수 항목입니다."); return; }
 
-        const newQtyInput = prompt("수량을 입력하세요:", log.qty);
+        const newQtyInput = prompt("수량을 입력하세요 (소수점 가능):", log.qty);
         if (newQtyInput === null) return;
-        const newQty = parseInt(newQtyInput);
+        const newQty = parseFloat(newQtyInput);
         if (isNaN(newQty) || newQty < 0) {
             alert("수량은 0 이상의 숫자이어야 합니다.");
             return;
@@ -1959,7 +1960,6 @@
         const newWorker = prompt("작업자/비고 내용을 입력하세요:", log.worker || '');
         if (newWorker === null) return;
 
-        // 💡 수정 전 기존 재고 역산 원복 (입고였으면 빼고, 출고였으면 더함)
         const oldInvIdx = inventory.findIndex(i => i.code === oldCode);
         if (oldInvIdx > -1) {
             if (oldType === 'in') inventory[oldInvIdx].qty -= oldQty;
@@ -1981,6 +1981,7 @@
             else if (log.type === 'current') inventory[newInvIdx].qty = log.qty;
 
             if (inventory[newInvIdx].qty < 0) inventory[newInvIdx].qty = 0;
+            inventory[newInvIdx].qty = Math.round(inventory[newInvIdx].qty * 1000) / 1000;
             inventory[newInvIdx].name = log.name;
         } else {
             inventory.push({
@@ -2022,6 +2023,7 @@
                     inventory[invIdx].qty -= log.qty; 
                     if (inventory[invIdx].qty < 0) inventory[invIdx].qty = 0;
                 }
+                inventory[invIdx].qty = Math.round(inventory[invIdx].qty * 1000) / 1000;
             }
             
             log.deletedAt = new Date().toLocaleString('ko-KR');
@@ -2060,6 +2062,7 @@
                             inventory[invIdx].qty -= log.qty;
                             if (inventory[invIdx].qty < 0) inventory[invIdx].qty = 0;
                         }
+                        inventory[invIdx].qty = Math.round(inventory[invIdx].qty * 1000) / 1000;
                     }
                     log.deletedAt = nowTime;
                     deletedHistoryLogs.push(log);
@@ -2144,6 +2147,7 @@
                         } else if (log.type === 'in') {
                             inventory[invIdx].qty += log.qty;
                         }
+                        inventory[invIdx].qty = Math.round(inventory[invIdx].qty * 1000) / 1000;
                     }
 
                     delete log.deletedAt;
@@ -2307,7 +2311,6 @@
             filtered = inventory.filter(item => item.team === currentTeam);
         }
 
-        // 💡 검색어 공백 및 대소문자 예외 처리 강화 (.trim().toLowerCase())
         const query = document.getElementById('inventory-search')?.value.toLowerCase().trim() || '';
         if (query) filtered = filtered.filter(item => item.name.toLowerCase().includes(query) || item.code.toLowerCase().includes(query));
 
@@ -2401,11 +2404,11 @@
 
         const wItems = filtered.filter(item => item.qty < item.safeQty);
         document.getElementById('dash-total-items').innerText = filtered.length;
-        document.getElementById('dash-total-qty').innerText = filtered.reduce((s, i) => s + i.qty, 0);
+        document.getElementById('dash-total-qty').innerText = Math.round(filtered.reduce((s, i) => s + i.qty, 0) * 1000) / 1000;
         document.getElementById('dash-warning-items').innerText = wItems.length;
         const wDiv = document.getElementById('dashboard-warnings');
         if (wItems.length > 0) {
-            wDiv.innerHTML = wItems.map(i => `<p style="margin: 6px 0; color:#b45309;">⚠️ <strong>[${i.team}] ${i.name}</strong> 부족. (현재: ${i.qty} / 안전: ${i.safeQty})</p>`).join('');
+            wDiv.innerHTML = wItems.map(i => `<p style="margin: 6px 0; color:#b45309;">⚠️ <strong>[${i.team}] ${i.name}</strong> 부족. (현재: ${i.qty}${i.unit} / 안전: ${i.safeQty}${i.unit})</p>`).join('');
             wDiv.style.display = 'block';
         } else {
             wDiv.innerHTML = '<p style="margin:0; color:#15803d;">✅ 모든 재고 적정.</p>';
@@ -2437,7 +2440,6 @@
             filtered = filtered.filter(h => h.code === selectedHistoryCode);
         }
 
-        // 💡 검색어 공백 및 대소문자 예외 처리 강화
         const query = document.getElementById('history-search')?.value.toLowerCase().trim() || '';
         if (query) {
             filtered = filtered.filter(h => h.name.toLowerCase().includes(query) || h.code.toLowerCase().includes(query) || (h.worker && h.worker.toLowerCase().includes(query)));
@@ -2514,7 +2516,6 @@
         const startDate = document.getElementById('search-start-date')?.value;
         const endDate = document.getElementById('search-end-date')?.value;
         const periodType = document.getElementById('search-period-type')?.value || 'all';
-        // 💡 검색어 공백 및 대소문자 예외 처리 강화
         const keyword = document.getElementById('search-period-keyword')?.value.toLowerCase().trim() || '';
 
         if (startDate) {
