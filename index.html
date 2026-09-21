@@ -678,7 +678,7 @@
             <div class="excel-guide-box">
                 💡 <strong>안전한 자재목록 엑셀 일괄 업로드 방법:</strong><br>
                 상단의 <strong>[👤 접속 팀]</strong>을 먼저 맞춘 후 <strong>[📊 자재목록 엑셀 업로드]</strong> 버튼을 누르면 업로드되는 자재가 모두 선택하신 팀으로 안전하게 연동됩니다. (예: 소방팀)<br>
-                💡 <strong>품목코드/자재명/단위 수정 안내:</strong> 품목코드, 자재명, 단위를 <strong>더블클릭(Double Click)</strong>하거나 수정 버튼을 통해 언제든지 내용을 수정할 수 있습니다.
+                💡 <strong>품목코드/자재명/단위 수정 안내:</strong> 단위가 <strong>'개', 'EA'</strong> 등인 품목은 정수만 입력되며, <strong>'kg', 'L', '봉', 'm'</strong> 등은 소수점 입력이 자동으로 허용됩니다.
             </div>
 
             <!-- 자재 목록 팀 필터 -->
@@ -774,10 +774,10 @@
             </div>
 
             <div class="quick-transaction-bar">
-                <div style="font-weight: bold; color: #0f172a; margin-bottom: 2px;">⚡ 입출고 등록 (소수점 입력 가능)</div>
+                <div style="font-weight: bold; color: #0f172a; margin-bottom: 2px;">⚡ 입출고 등록 (단위별 정수/소수점 자동 판정)</div>
                 <div class="quick-row">
                     <input type="date" id="quick-trans-date" class="quick-input-balanced" style="width: 145px;">
-                    <select id="quick-trans-item" class="quick-input-balanced" style="flex-grow: 2; min-width: 200px;">
+                    <select id="quick-trans-item" class="quick-input-balanced" style="flex-grow: 2; min-width: 200px;" onchange="onQuickItemSelected()">
                     </select>
                     <select id="quick-trans-type" class="quick-input-balanced" style="width: 100px;">
                         <option value="in">입고 (+)</option>
@@ -1024,7 +1024,7 @@
 
     let remotePassword = atob("ODg4OA=="); // "8888"
     let isInitialLoadMat = true;
-    let codeSortAsc = true; // 품목코드 정렬 상태 플래그
+    let codeSortAsc = true;
 
     database.ref('system password').on('value', (snapshot) => {
         const val = snapshot.val();
@@ -1154,6 +1154,27 @@
     document.getElementById('quick-trans-date').valueAsDate = new Date();
     document.getElementById('search-start-date').valueAsDate = new Date();
     document.getElementById('search-end-date').valueAsDate = new Date();
+
+    // 💡 [핵심 함수]: 단위가 개/EA 등인지 판정하여 수량 파싱 및 소수점 허용 여부 결정
+    function parseQuantityByUnit(val, unit) {
+        const cleanUnit = (unit || '개').trim().toLowerCase();
+        // 개, ea 등이 포함된 단위는 정수만 허용
+        const isIntegerUnit = cleanUnit.includes('개') || cleanUnit.includes('ea') || cleanUnit.includes('개소') || cleanUnit.includes('대');
+        
+        const num = parseFloat(val);
+        if (isNaN(num)) return 0;
+
+        if (isIntegerUnit) {
+            return Math.floor(num); // 소수점 버림 또는 정수 변환
+        } else {
+            return Math.round(num * 1000) / 1000; // kg, L, 봉 등은 소수점 3자리까지 허용
+        }
+    }
+
+    function isUnitIntegerOnly(unit) {
+        const cleanUnit = (unit || '개').trim().toLowerCase();
+        return cleanUnit.includes('개') || cleanUnit.includes('ea') || cleanUnit.includes('개소') || cleanUnit.includes('대');
+    }
 
     async function saveData() {
         if (isReadOnlyHistoryMode) return;
@@ -1405,11 +1426,12 @@
             return;
         }
 
-        const unit = prompt("단위를 입력하세요 (예: 개, kg, L, 봉):", "개") || "개";
-        const qtyInput = prompt("현재 재고 수량을 입력하세요 (소수점 가능):", "0");
-        const qty = parseFloat(qtyInput) || 0;
+        const unit = prompt("단위를 입력하세요 (예: 개, kg, L, 봉, m):", "개") || "개";
+        const qtyInput = prompt(`현재 재고 수량을 입력하세요 (${isUnitIntegerOnly(unit) ? '개/EA 단위는 정수만 입력 가능' : '소수점 입력 가능'}):`, "0");
+        const qty = parseQuantityByUnit(qtyInput, unit);
+
         const safeQtyInput = prompt("안전 재고 수량을 입력하세요:", "5");
-        const safeQty = parseFloat(safeQtyInput) || 5;
+        const safeQty = parseQuantityByUnit(safeQtyInput, unit);
 
         inventory.push({ team, code, name: name.trim(), unit: unit.trim(), qty, safeQty });
 
@@ -1517,8 +1539,8 @@
                     if (!unit || unit === 'undefined' || unit === 'nan') unit = '개';
 
                     let qtyRaw = rowData['현재재고'] || rowData['재고현황'] || rowData['재고'] || rowData['수량'] || 0;
-                    let qty = parseFloat(String(qtyRaw).replace(/[^0-9.-]/g, '')) || 0;
-                    let safeQty = parseFloat(String(rowData['안전재고'] || 5).replace(/[^0-9.-]/g, '')) || 5;
+                    let qty = parseQuantityByUnit(qtyRaw, unit);
+                    let safeQty = parseQuantityByUnit(rowData['안전재고'] || 5, unit);
 
                     const existingIndex = inventory.findIndex(item => item.code === code);
                     if (existingIndex > -1) {
@@ -1608,16 +1630,20 @@
                         if(sheetName.includes('기타')) team = '공통팀';
 
                         let code = String(rowData['품목코드'] || rowData['코드'] || '').trim();
+                        let matchedItem = inventory.find(inv => inv.code === code);
+                        let itemUnit = matchedItem ? matchedItem.unit : '개';
+
                         if (!code) {
                             let hName = String(currentName).replace(/\s/g, '').toLowerCase();
                             let hSpec = String(currentSpec).replace(/\s/g, '').toLowerCase();
                             
-                            let matchedItem = inventory.find(inv => {
+                            matchedItem = inventory.find(inv => {
                                 let invName = inv.name.replace(/\s/g, '').toLowerCase();
                                 let cleanSpec = hSpec.replace(/\(.*\)/g, ''); 
                                 return invName.includes(hName) && (invName.includes(hSpec) || invName.includes(cleanSpec));
                             });
                             code = matchedItem ? matchedItem.code : '-';
+                            if (matchedItem) itemUnit = matchedItem.unit;
                         }
 
                         let worker = String(rowData['사용처'] || rowData['사 용 처'] || rowData['작업자'] || '').trim();
@@ -1625,9 +1651,9 @@
                         if(note && worker) worker += ` (${note})`;
                         else if (note) worker = note;
 
-                        let inQty = parseFloat(String(rowData['입고']).replace(/[^0-9.-]/g, '')) || 0;
-                        let outQty = parseFloat(String(rowData['출고']).replace(/[^0-9.-]/g, '')) || 0;
-                        let singleQty = parseFloat(String(rowData['수량']).replace(/[^0-9.-]/g, '')) || 0;
+                        let inQty = parseQuantityByUnit(rowData['입고'] || 0, itemUnit);
+                        let outQty = parseQuantityByUnit(rowData['출고'] || 0, itemUnit);
+                        let singleQty = parseQuantityByUnit(rowData['수량'] || 0, itemUnit);
                         let typeRaw = String(rowData['구분'] || rowData['입출고'] || '').trim();
 
                         const pushLogIfUnique = (logObj) => {
@@ -1638,11 +1664,11 @@
                             }
                         };
 
-                        if (inQty > 0) { pushLogIfUnique({ id: 'hist_' + Date.now() + '_' + Math.floor(Math.random() * 10000), date: dateRaw, team: team, type: 'in', code: code, name: name, qty: inQty, unit: '개', worker: worker }); }
-                        if (outQty > 0) { pushLogIfUnique({ id: 'hist_' + Date.now() + '_' + Math.floor(Math.random() * 10000), date: dateRaw, team: team, type: 'out', code: code, name: name, qty: outQty, unit: '개', worker: worker }); }
+                        if (inQty > 0) { pushLogIfUnique({ id: 'hist_' + Date.now() + '_' + Math.floor(Math.random() * 10000), date: dateRaw, team: team, type: 'in', code: code, name: name, qty: inQty, unit: itemUnit, worker: worker }); }
+                        if (outQty > 0) { pushLogIfUnique({ id: 'hist_' + Date.now() + '_' + Math.floor(Math.random() * 10000), date: dateRaw, team: team, type: 'out', code: code, name: name, qty: outQty, unit: itemUnit, worker: worker }); }
                         if (singleQty > 0 && inQty === 0 && outQty === 0) {
                             let type = (typeRaw.includes('출고') || typeRaw.toLowerCase() === 'out') ? 'out' : 'in';
-                            pushLogIfUnique({ id: 'hist_' + Date.now() + '_' + Math.floor(Math.random() * 10000), date: dateRaw, team: team, type: type, code: code, name: name, qty: singleQty, unit: '개', worker: worker });
+                            pushLogIfUnique({ id: 'hist_' + Date.now() + '_' + Math.floor(Math.random() * 10000), date: dateRaw, team: team, type: type, code: code, name: name, qty: singleQty, unit: itemUnit, worker: worker });
                         }
                     }
                 });
@@ -1729,6 +1755,24 @@
         renderApp();
     }
 
+    // 자재 선택 시 소수점 입력 가능 여부에 따른 안내 또는 제어
+    function onQuickItemSelected() {
+        const itemCode = document.getElementById('quick-trans-item').value;
+        const item = inventory.find(i => i.code === itemCode);
+        const qtyInput = document.getElementById('quick-trans-qty');
+        if (item && qtyInput) {
+            if (isUnitIntegerOnly(item.unit)) {
+                qtyInput.placeholder = "수량 (정수만 입력)";
+                // 현재 입력된 값이 소수점이면 정수로 자동 변환
+                if (qtyInput.value.includes('.')) {
+                    qtyInput.value = Math.floor(parseFloat(qtyInput.value) || 1);
+                }
+            } else {
+                qtyInput.placeholder = "수량 (소수점 입력 가능)";
+            }
+        }
+    }
+
     async function submitQuickTransaction() {
         if (isReadOnlyHistoryMode) {
             alert('⚠️ 과거 백업 조회 모드에서는 등록이 차단됩니다.');
@@ -1737,17 +1781,30 @@
         const date = document.getElementById('quick-trans-date').value || new Date().toISOString().split('T')[0];
         const type = document.getElementById('quick-trans-type').value;
         const itemCode = document.getElementById('quick-trans-item').value;
-        const qty = parseFloat(document.getElementById('quick-trans-qty').value);
+        const rawQtyInput = document.getElementById('quick-trans-qty').value;
         const worker = document.getElementById('quick-trans-worker').value;
 
-        if (!itemCode || isNaN(qty) || qty <= 0) {
-            alert('올바른 자재와 수량을 입력해주세요.');
+        if (!itemCode) {
+            alert('자재를 선택해주세요.');
             return;
         }
 
         const idx = inventory.findIndex(i => i.code === itemCode);
         if (idx > -1) {
             const item = inventory[idx];
+            
+            // 단위가 개/EA인데 소수점을 입력하려고 한 경우 경고 및 차단
+            if (isUnitIntegerOnly(item.unit) && rawQtyInput.includes('.')) {
+                alert(`⚠️ '${item.unit}' 단위인 자재는 소수점으로 입출고할 수 없습니다. 정수만 입력해 주세요.`);
+                return;
+            }
+
+            const qty = parseQuantityByUnit(rawQtyInput, item.unit);
+            if (isNaN(qty) || qty <= 0) {
+                alert('올바른 수량을 입력해주세요.');
+                return;
+            }
+
             if (type === 'out' && item.qty < qty) {
                 alert('출고 수량이 현재고보다 많습니다!');
                 return;
@@ -1759,7 +1816,6 @@
                 item.qty -= qty;
             }
 
-            // 소수점 연산 오차 방지 (소수점 3자리까지 반올림)
             item.qty = Math.round(item.qty * 1000) / 1000;
 
             historyLogs.push({
@@ -1814,27 +1870,11 @@
         }
 
         const item = inventory.find(i => i.code === oldCode);
-        if (item) {
-            item.code = trimmedCode;
-        }
+        if (item) item.code = trimmedCode;
 
-        historyLogs.forEach(h => {
-            if (h.code === oldCode) {
-                h.code = trimmedCode;
-            }
-        });
-
-        deletedInventoryItems.forEach(i => {
-            if (i.code === oldCode) {
-                i.code = trimmedCode;
-            }
-        });
-
-        deletedHistoryLogs.forEach(h => {
-            if (h.code === oldCode) {
-                h.code = trimmedCode;
-            }
-        });
+        historyLogs.forEach(h => { if (h.code === oldCode) h.code = trimmedCode; });
+        deletedInventoryItems.forEach(i => { if (i.code === oldCode) i.code = trimmedCode; });
+        deletedHistoryLogs.forEach(h => { if (h.code === oldCode) h.code = trimmedCode; });
 
         await saveData();
         renderApp();
@@ -1855,15 +1895,9 @@
         }
 
         const item = inventory.find(i => i.code === itemCode);
-        if (item) {
-            item.name = trimmedName;
-        }
+        if (item) item.name = trimmedName;
 
-        historyLogs.forEach(h => {
-            if (h.code === itemCode) {
-                h.name = trimmedName;
-            }
-        });
+        historyLogs.forEach(h => { if (h.code === itemCode) h.name = trimmedName; });
 
         await saveData();
         renderApp();
@@ -1875,7 +1909,7 @@
             alert('⚠️ 과거 백업 조회 모드에서는 수정이 차단됩니다.');
             return;
         }
-        const newUnit = prompt(`단위 수정 (${itemCode}) [예: 개, kg, L, 봉]:`, currentUnit);
+        const newUnit = prompt(`단위 수정 (${itemCode}) [예: 개, kg, L, 봉, m]:`, currentUnit);
         if (newUnit === null) return;
         const trimmedUnit = newUnit.trim();
         if (!trimmedUnit) {
@@ -1886,12 +1920,18 @@
         const item = inventory.find(i => i.code === itemCode);
         if (item) {
             item.unit = trimmedUnit;
+            // 만약 개 단위로 바꾸었는데 기존 수량이 소수점이면 정수로 자동 내림 보정
+            if (isUnitIntegerOnly(trimmedUnit)) {
+                item.qty = Math.floor(item.qty);
+                item.safeQty = Math.floor(item.safeQty);
+            }
         }
 
-        historyLogs.forEach(h => {
+        historyLogs.forEach(h => { 
             if (h.code === itemCode) {
                 h.unit = trimmedUnit;
-            }
+                if (isUnitIntegerOnly(trimmedUnit)) h.qty = Math.floor(h.qty);
+            } 
         });
 
         await saveData();
@@ -1916,6 +1956,9 @@
         const oldQty = log.qty;
         const oldCode = log.code;
 
+        const targetItem = inventory.find(i => i.code === oldCode);
+        const itemUnit = targetItem ? targetItem.unit : (log.unit || '개');
+
         const newDate = prompt("일시를 입력하세요 (YYYY-MM-DD):", log.date);
         if (newDate === null) return;
         if (!newDate.trim()) { alert("일시는 필수 항목입니다."); return; }
@@ -1930,13 +1973,10 @@
         const cleanTypeInput = newTypeInput.trim();
         let newType = log.type;
 
-        if (cleanTypeInput === '입고' || cleanTypeInput.toLowerCase() === 'in') {
-            newType = 'in';
-        } else if (cleanTypeInput === '출고' || cleanTypeInput.toLowerCase() === 'out') {
-            newType = 'out';
-        } else if (cleanTypeInput === '현재재고' || cleanTypeInput.toLowerCase() === 'current') {
-            newType = 'current';
-        } else {
+        if (cleanTypeInput === '입고' || cleanTypeInput.toLowerCase() === 'in') newType = 'in';
+        else if (cleanTypeInput === '출고' || cleanTypeInput.toLowerCase() === 'out') newType = 'out';
+        else if (cleanTypeInput === '현재재고' || cleanTypeInput.toLowerCase() === 'current') newType = 'current';
+        else {
             alert("구분은 [입고], [출고], [현재재고] 중 하나로 입력해주세요.");
             return;
         }
@@ -1949,9 +1989,15 @@
         if (newName === null) return;
         if (!newName.trim()) { alert("자재명은 필수 항목입니다."); return; }
 
-        const newQtyInput = prompt("수량을 입력하세요 (소수점 가능):", log.qty);
+        const newQtyInput = prompt(`수량을 입력하세요 (${isUnitIntegerOnly(itemUnit) ? '정수만 입력 가능' : '소수점 가능'}):`, log.qty);
         if (newQtyInput === null) return;
-        const newQty = parseFloat(newQtyInput);
+
+        if (isUnitIntegerOnly(itemUnit) && newQtyInput.includes('.')) {
+            alert(`⚠️ '${itemUnit}' 단위는 소수점으로 수정할 수 없습니다.`);
+            return;
+        }
+
+        const newQty = parseQuantityByUnit(newQtyInput, itemUnit);
         if (isNaN(newQty) || newQty < 0) {
             alert("수량은 0 이상의 숫자이어야 합니다.");
             return;
@@ -1988,7 +2034,7 @@
                 team: log.team || currentTeam,
                 code: log.code,
                 name: log.name,
-                unit: log.unit || '개',
+                unit: itemUnit,
                 qty: log.type === 'in' ? log.qty : (log.type === 'current' ? log.qty : 0),
                 safeQty: 5
             });
@@ -2045,9 +2091,7 @@
         if (chks.length === 0) { alert('삭제할 이력을 선택해 주세요.'); return; }
         
         let targetIds = [];
-        chks.forEach(cb => {
-            targetIds.push(cb.value);
-        });
+        chks.forEach(cb => { targetIds.push(cb.value); });
 
         if (confirm(`선택한 ${targetIds.length}개의 입출고 이력을 삭제하시겠습니까?`)) {
             const nowTime = new Date().toLocaleString('ko-KR');
@@ -2291,9 +2335,7 @@
     }
 
     function toggleAllHistoryCheckboxes(s) {
-        document.querySelectorAll('.history-checkbox').forEach(cb => {
-            cb.checked = s.checked;
-        });
+        document.querySelectorAll('.history-checkbox').forEach(cb => { cb.checked = s.checked; });
     }
 
     function renderApp() {
@@ -2315,11 +2357,8 @@
         if (query) filtered = filtered.filter(item => item.name.toLowerCase().includes(query) || item.code.toLowerCase().includes(query));
 
         filtered.sort((a, b) => {
-            if (codeSortAsc) {
-                return a.code.localeCompare(b.code);
-            } else {
-                return b.code.localeCompare(a.code);
-            }
+            if (codeSortAsc) return a.code.localeCompare(b.code);
+            else return b.code.localeCompare(a.code);
         });
 
         const tbody = document.getElementById('inventory-body');
@@ -2376,7 +2415,7 @@
                 if (singleItem) {
                     const opt = document.createElement('option');
                     opt.value = singleItem.code;
-                    opt.text = `[${singleItem.team}] ${singleItem.name} (현재고: ${singleItem.qty}${singleItem.unit})`;
+                    opt.text = `[${singleItem.team}] ${singleItem.name} (현재고: ${singleItem.qty}${singleItem.unit}) - ${singleItem.unit}`;
                     quickItemSelect.appendChild(opt);
                     quickItemSelect.value = singleItem.code;
                 } else {
@@ -2400,6 +2439,7 @@
                     });
                 }
             }
+            onQuickItemSelected();
         }
 
         const wItems = filtered.filter(item => item.qty < item.safeQty);
@@ -2427,11 +2467,8 @@
         let filtered = [];
         if (currentTeam === 'ALL') {
             const subHistoryFilter = document.getElementById('admin-sub-history-filter')?.value || 'ALL';
-            if (subHistoryFilter === 'ALL') {
-                filtered = historyLogs;
-            } else {
-                filtered = historyLogs.filter(h => h.team === subHistoryFilter);
-            }
+            if (subHistoryFilter === 'ALL') filtered = historyLogs;
+            else filtered = historyLogs.filter(h => h.team === subHistoryFilter);
         } else {
             filtered = historyLogs.filter(h => h.team === currentTeam);
         }
@@ -2466,13 +2503,9 @@
             const tr = document.createElement('tr');
             let badge = '';
             
-            if (h.type === 'in') {
-                badge = '<span class="badge-in">입고</span>';
-            } else if (h.type === 'out') {
-                badge = '<span class="badge-out">출고</span>';
-            } else {
-                badge = '<span class="badge-current">현재재고</span>';
-            }
+            if (h.type === 'in') badge = '<span class="badge-in">입고</span>';
+            else if (h.type === 'out') badge = '<span class="badge-out">출고</span>';
+            else badge = '<span class="badge-current">현재재고</span>';
 
             const actionBtnsHtml = `
                 <button class="btn-edit-hist" onclick="editHistoryItem('${h.id}')">수정</button>
@@ -2504,11 +2537,8 @@
         let filtered = [];
         if (currentTeam === 'ALL') {
             const subPeriodFilter = document.getElementById('admin-sub-period-filter')?.value || 'ALL';
-            if (subPeriodFilter === 'ALL') {
-                filtered = historyLogs;
-            } else {
-                filtered = historyLogs.filter(h => h.team === subPeriodFilter);
-            }
+            if (subPeriodFilter === 'ALL') filtered = historyLogs;
+            else filtered = historyLogs.filter(h => h.team === subPeriodFilter);
         } else {
             filtered = historyLogs.filter(h => h.team === currentTeam);
         }
@@ -2518,20 +2548,10 @@
         const periodType = document.getElementById('search-period-type')?.value || 'all';
         const keyword = document.getElementById('search-period-keyword')?.value.toLowerCase().trim() || '';
 
-        if (startDate) {
-            filtered = filtered.filter(h => h.date >= startDate);
-        }
-        if (endDate) {
-            filtered = filtered.filter(h => h.date <= endDate);
-        }
-
-        if (periodType !== 'all') {
-            filtered = filtered.filter(h => h.type === periodType);
-        }
-
-        if (keyword) {
-            filtered = filtered.filter(h => h.name.toLowerCase().includes(keyword) || h.code.toLowerCase().includes(keyword) || (h.worker && h.worker.toLowerCase().includes(keyword)));
-        }
+        if (startDate) filtered = filtered.filter(h => h.date >= startDate);
+        if (endDate) filtered = filtered.filter(h => h.date <= endDate);
+        if (periodType !== 'all') filtered = filtered.filter(h => h.type === periodType);
+        if (keyword) filtered = filtered.filter(h => h.name.toLowerCase().includes(keyword) || h.code.toLowerCase().includes(keyword) || (h.worker && h.worker.toLowerCase().includes(keyword)));
 
         filtered.sort((a, b) => new Date(b.date) - new Date(a.date));
 
@@ -2543,13 +2563,9 @@
         filtered.forEach(h => {
             const tr = document.createElement('tr');
             let badge = '';
-            if (h.type === 'in') {
-                badge = '<span class="badge-in">입고</span>';
-            } else if (h.type === 'out') {
-                badge = '<span class="badge-out">출고</span>';
-            } else {
-                badge = '<span class="badge-current">현재재고</span>';
-            }
+            if (h.type === 'in') badge = '<span class="badge-in">입고</span>';
+            else if (h.type === 'out') badge = '<span class="badge-out">출고</span>';
+            else badge = '<span class="badge-current">현재재고</span>';
 
             tr.innerHTML = `
                 <td>${h.date}</td>
