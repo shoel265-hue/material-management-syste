@@ -1183,6 +1183,10 @@
             .replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r?\n/g, ' '));
     }
     const QTY_EPS = 1e-9;
+    function todayStr() {
+        const d = new Date();
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
 
     // ===== 동시 저장 충돌 방지 (낙관적 잠금) =====
     let localRev = null;
@@ -1197,6 +1201,7 @@
         const data = doc.data();
         isUpdatingFromRemote = true;
         try {
+            if (localRev !== null && (data.rev || 0) < localRev) return;   // 오래된 스냅샷 무시
             localRev = data.rev || 0;
             inventory = Array.isArray(data.inventory) ? data.inventory : [];
             historyLogs = Array.isArray(data.historyLogs) ? data.historyLogs : [];
@@ -1256,9 +1261,9 @@
     let currentTeam = 'ALL';
     let selectedHistoryCode = null;
 
-    document.getElementById('quick-trans-date').valueAsDate = new Date();
-    document.getElementById('search-start-date').valueAsDate = new Date();
-    document.getElementById('search-end-date').valueAsDate = new Date();
+    document.getElementById('quick-trans-date').value = todayStr();
+    document.getElementById('search-start-date').value = todayStr();
+    document.getElementById('search-end-date').value = todayStr();
 
     function parseQuantityByUnit(val, unit) {
         const cleanUnit = (unit || '개').trim().toLowerCase();
@@ -1308,6 +1313,7 @@
 
         const ref = store.collection('inventory_system').doc('main_data');
         try {
+            let committedRev = null;
             await store.runTransaction(async (tx) => {
                 const snap = await tx.get(ref);
                 const remoteRev = snap.exists ? (snap.data().rev || 0) : 0;
@@ -1316,6 +1322,7 @@
                     err.code = 'rev-conflict';
                     throw err;
                 }
+                committedRev = remoteRev + 1;
                 tx.set(ref, {
                     inventory: inventory,
                     historyLogs: historyLogs,
@@ -1325,7 +1332,7 @@
                     rev: remoteRev + 1
                 });
             });
-            localRev = localRev + 1;
+            localRev = Math.max(localRev, committedRev);
         } catch (e) {
             if (e && e.code === 'rev-conflict') {
                 alert('⚠️ 다른 사용자가 먼저 데이터를 저장했습니다.\n방금 작업은 반영되지 않았습니다. 최신 데이터로 다시 불러왔으니 확인 후 다시 시도해 주세요.');
@@ -1348,7 +1355,7 @@
     }
 
     function printPage() {
-        document.getElementById('print-date-info').innerText = `출력일자: ${new Date().toISOString().split('T')[0]} | 담당 팀: ${currentTeam === 'ALL' ? '전체 파트' : currentTeam}`;
+        document.getElementById('print-date-info').innerText = `출력일자: ${todayStr()} | 담당 팀: ${currentTeam === 'ALL' ? '전체 파트' : currentTeam}`;
         window.print();
     }
 
@@ -1359,7 +1366,7 @@
         const activeTeamName = currentTeam === 'ALL' ? '전체' : currentTeam;
         const opt = {
             margin:       [10, 10, 10, 10],
-            filename:     `자재관리대장_${activeTeamName}_${new Date().toISOString().split('T')[0]}.pdf`,
+            filename:     `자재관리대장_${activeTeamName}_${todayStr()}.pdf`,
             image:        { type: 'jpeg', quality: 0.98 },
             html2canvas:  { scale: 2, useCORS: true },
             jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
@@ -1383,7 +1390,7 @@
         const worksheet = XLSX.utils.json_to_sheet(dataToExport);
         const workbook = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(workbook, worksheet, "자재목록");
-        XLSX.writeFile(workbook, `자재목록_${new Date().toISOString().split('T')[0]}.xlsx`);
+        XLSX.writeFile(workbook, `자재목록_${todayStr()}.xlsx`);
     }
 
     function exportHistoryToExcel() {
@@ -1413,7 +1420,7 @@
         const worksheet = XLSX.utils.json_to_sheet(dataToExport);
         const workbook = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(workbook, worksheet, "입출고내역");
-        XLSX.writeFile(workbook, `입출고내역_${currentTeam}_${new Date().toISOString().split('T')[0]}.xlsx`);
+        XLSX.writeFile(workbook, `입출고내역_${currentTeam}_${todayStr()}.xlsx`);
     }
 
     function exportPeriodResultToExcel() {
@@ -1454,7 +1461,7 @@
 
     function exportBackup() {
         let exportData, filename;
-        const today = new Date().toISOString().split('T')[0];
+        const today = todayStr();
 
         if (currentTeam === 'ALL') {
             exportData = {
@@ -1579,7 +1586,7 @@
         if (qty > 0) {
             historyLogs.push({
                 id: 'hist_' + Date.now() + '_' + Math.floor(Math.random() * 10000),
-                date: new Date().toISOString().split('T')[0],
+                date: todayStr(),
                 team: team,
                 type: 'current',
                 code: code,
@@ -1660,7 +1667,7 @@
                 let qtyUpdatedCount = 0;
                 let renamedCount = 0;
                 const hasQtyCol = ['현재재고', '재고현황', '재고', '수량'].some(k => headers.includes(k));
-                let todayDate = new Date().toISOString().split('T')[0];
+                let todayDate = todayStr();
                 let sessionUsedCodes = new Set();
 
                 for (let i = headerRowIndex + 1; i < rows.length; i++) {
@@ -1799,7 +1806,7 @@
 
                         let dateRaw = String(rowData['일시'] || rowData['날짜'] || rowData['년월일'] || '').trim();
                         if (dateRaw && dateRaw.length >= 10) dateRaw = dateRaw.substring(0, 10).replace(/\//g, '-').replace(/\./g, '-');
-                        if (!dateRaw) dateRaw = new Date().toISOString().split('T')[0];
+                        if (!dateRaw) dateRaw = todayStr();
 
                         let team = rowData['담당팀'] || rowData['팀'] || (currentTeam === 'ALL' ? '소방팀' : currentTeam); 
                         if(sheetName.includes('기타')) team = '공통팀';
@@ -1960,7 +1967,7 @@
             alert('⚠️ 과거 백업 조회 모드에서는 등록이 차단됩니다.');
             return;
         }
-        const date = document.getElementById('quick-trans-date').value || new Date().toISOString().split('T')[0];
+        const date = document.getElementById('quick-trans-date').value || todayStr();
         const type = document.getElementById('quick-trans-type').value;
         const itemCode = document.getElementById('quick-trans-item').value;
         const rawQtyInput = document.getElementById('quick-trans-qty').value;
