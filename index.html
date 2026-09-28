@@ -1269,7 +1269,7 @@
         const cleanUnit = (unit || '개').trim().toLowerCase();
         const isIntegerUnit = cleanUnit.includes('개') || cleanUnit.includes('ea') || cleanUnit.includes('개소') || cleanUnit.includes('대');
         
-        const num = parseFloat(val);
+        const num = parseFloat(String(val === null || val === undefined ? '' : val).replace(/,/g, ''));
         if (isNaN(num)) return 0;
 
         if (isIntegerUnit) {
@@ -1519,12 +1519,8 @@
             }
         };
 
-        inventory.forEach(i => {
-            if (i.team === team) collectNums(i.code);
-        });
-        deletedInventoryItems.forEach(i => {
-            if (i.team === team) collectNums(i.code);
-        });
+        inventory.forEach(i => collectNums(i.code));
+        deletedInventoryItems.forEach(i => collectNums(i.code));
         extraUsedCodes.forEach(codeStr => {
             if (codeStr && codeStr.startsWith(prefix + '-')) {
                 const numPart = parseInt(codeStr.replace(prefix + '-', ''), 10);
@@ -1563,7 +1559,8 @@
         if (!name || !name.trim()) return;
 
         const codeInput = prompt(`품목코드를 확인/수정하세요 (중복 불가):`, autoCode);
-        const code = (codeInput && codeInput.trim()) ? codeInput.trim() : autoCode;
+        if (codeInput === null) return;
+        const code = codeInput.trim() ? codeInput.trim() : autoCode;
 
         if (deletedInventoryItems.some(i => i.code === code)) {
             alert(`⚠️ 삭제 보관함에 같은 품목코드(${code})가 있습니다. 복원 시 충돌하므로 다른 코드를 사용해 주세요.`);
@@ -1574,11 +1571,18 @@
             return;
         }
 
-        const unit = prompt("단위를 입력하세요 (예: 개, kg, L, 봉, m):", "개") || "개";
+        const unitInput = prompt("단위를 입력하세요 (예: 개, kg, L, 봉, m):", "개");
+        if (unitInput === null) return;
+        const unit = unitInput.trim() || "개";
         const qtyInput = prompt(`현재 재고 수량을 입력하세요 (${isUnitIntegerOnly(unit) ? '개/EA 단위는 정수만 입력 가능' : '소수점 입력 가능'}):`, "0");
+        if (qtyInput === null) return;
+        const isNumInput = (v) => /^\d+(\.\d+)?$/.test(String(v).trim().replace(/,/g, ''));
+        if (!isNumInput(qtyInput)) { alert('재고 수량은 0 이상의 숫자로 입력해 주세요.'); return; }
         const qty = parseQuantityByUnit(qtyInput, unit);
 
         const safeQtyInput = prompt("안전 재고 수량을 입력하세요:", "5");
+        if (safeQtyInput === null) return;
+        if (!isNumInput(safeQtyInput)) { alert('안전 재고는 0 이상의 숫자로 입력해 주세요.'); return; }
         const safeQty = parseQuantityByUnit(safeQtyInput, unit);
 
         inventory.push({ team, code, name: name.trim(), unit: unit.trim(), qty, safeQty });
@@ -1692,15 +1696,23 @@
                     }
                     sessionUsedCodes.add(code);
 
-                    let unit = String(rowData['단위'] || '개').trim();
-                    if (!unit || unit === 'undefined' || unit === 'nan') unit = '개';
+                    const preItem = inventory.find(item => item.code === code && item.team === team);
+                    const pickCell = (...vals) => vals.find(v => v !== undefined && v !== null && String(v).trim() !== '');
 
-                    let qtyRaw = rowData['현재재고'] || rowData['재고현황'] || rowData['재고'] || rowData['수량'] || 0;
-                    let qty = parseQuantityByUnit(qtyRaw, unit);
-                    let safeQty = parseQuantityByUnit(rowData['안전재고'] || 5, unit);
+                    let unitCell = pickCell(rowData['단위']);
+                    let unit = unitCell === undefined ? (preItem ? preItem.unit : '개') : String(unitCell).trim();
+                    if (!unit || unit === 'undefined' || unit === 'nan') unit = preItem ? preItem.unit : '개';
+
+                    const qtyCellRaw = pickCell(rowData['현재재고'], rowData['재고현황'], rowData['재고'], rowData['수량']);
+                    const qtyGiven = qtyCellRaw !== undefined;
+                    let qty = qtyGiven ? parseQuantityByUnit(qtyCellRaw, unit) : 0;
+                    const safeCellRaw = pickCell(rowData['안전재고']);
+                    const safeGiven = safeCellRaw !== undefined;
+                    let safeQty = safeGiven ? parseQuantityByUnit(safeCellRaw, unit) : 5;
 
                     // 삭제 보관함에만 있는 코드와 겹치면 새 코드 부여 (복원 시 중복 방지)
-                    if (!inventory.some(item => item.code === code) && deletedInventoryItems.some(d => d.code === code)) {
+                    const sameCodeItem = inventory.find(item => item.code === code);
+                    if ((!sameCodeItem && deletedInventoryItems.some(d => d.code === code)) || (sameCodeItem && sameCodeItem.team !== team)) {
                         code = getNextItemCode(team, sessionUsedCodes);
                         sessionUsedCodes.add(code);
                         renamedCount++;
@@ -1711,9 +1723,9 @@
                         inventory[existingIndex].team = team;
                         inventory[existingIndex].name = name;
                         inventory[existingIndex].unit = unit;
-                        inventory[existingIndex].safeQty = safeQty;
+                        if (safeGiven) inventory[existingIndex].safeQty = safeQty;
                         // 엑셀에 재고 열이 있으면 수량도 갱신
-                        if (hasQtyCol && inventory[existingIndex].qty !== qty) {
+                        if (hasQtyCol && qtyGiven && inventory[existingIndex].qty !== qty) {
                             inventory[existingIndex].qty = qty;
                             qtyUpdatedCount++;
                             if (qty > 0 && !historyLogs.some(h => h.code === code && h.type === 'current')) {
@@ -1760,6 +1772,7 @@
 
         const reader = new FileReader();
         reader.onload = async function(e) {
+            const backupLogs = JSON.parse(JSON.stringify(historyLogs));
             try {
                 const data = new Uint8Array(e.target.result);
                 const workbook = XLSX.read(data, { type: 'array', cellDates: true, cellFormulas: true });
@@ -1860,7 +1873,12 @@
                     alert(`📜 이력 엑셀 업로드 완료!\n* 총 ${addedCount}건의 입출고 내역이 추가되었습니다.`); renderApp();
                 } else alert('새로 추가할 이력 데이터가 없습니다.');
                 event.target.value = ''; 
-            } catch (err) { alert('오류가 발생했습니다.'); console.error(err); }
+            } catch (err) {
+                event.target.value = '';
+                if (err && err.isSaveError) return;
+                historyLogs = backupLogs;
+                alert('오류가 발생했습니다. 변경 내용은 반영되지 않았습니다.'); console.error(err);
+            }
         };
         reader.readAsArrayBuffer(file);
     }
@@ -2169,7 +2187,7 @@
 
         const newDate = prompt("일시를 입력하세요 (YYYY-MM-DD):", log.date);
         if (newDate === null) return;
-        if (!newDate.trim()) { alert("일시는 필수 항목입니다."); return; }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate.trim())) { alert("일시는 YYYY-MM-DD 형식으로 입력해 주세요."); return; }
 
         let typeStr = "입고";
         if (log.type === 'out') typeStr = "출고";
@@ -2370,8 +2388,8 @@
 
             tr.innerHTML = `
                 <td class="checkbox-cell"><input type="checkbox" class="row-checkbox restore-checkbox" value="${h.id}"></td>
-                <td style="color:#64748b; font-size:12px;">${h.deletedAt || '-'}</td>
-                <td>${h.date}</td>
+                <td style="color:#64748b; font-size:12px;">${esc(h.deletedAt || '-')}</td>
+                <td>${esc(h.date)}</td>
                 <td><strong>${esc(h.team)}</strong></td>
                 <td>${badge}</td>
                 <td>${esc(h.code)}</td>
@@ -2485,7 +2503,7 @@
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td class="checkbox-cell"><input type="checkbox" class="row-checkbox inv-restore-checkbox" value="${esc(item.code)}"></td>
-                <td style="color:#64748b; font-size:12px;">${item.deletedAt || '-'}</td>
+                <td style="color:#64748b; font-size:12px;">${esc(item.deletedAt || '-')}</td>
                 <td><strong>${esc(item.team)}</strong></td>
                 <td>${esc(item.code)}</td>
                 <td style="text-align:left; font-weight:bold;">${esc(item.name)}</td>
@@ -2750,7 +2768,7 @@
 
             tr.innerHTML = `
                 <td class="checkbox-cell">${checkboxHtml}</td>
-                <td>${h.date}</td>
+                <td>${esc(h.date)}</td>
                 <td><strong>${esc(h.team)}</strong></td>
                 <td>${badge}</td>
                 <td>${esc(h.code)}</td>
@@ -2802,7 +2820,7 @@
             else badge = '<span class="badge-current">현재재고</span>';
 
             tr.innerHTML = `
-                <td>${h.date}</td>
+                <td>${esc(h.date)}</td>
                 <td><strong>${esc(h.team)}</strong></td>
                 <td>${badge}</td>
                 <td>${esc(h.code)}</td>
