@@ -1171,27 +1171,69 @@
     let isReadOnlyHistoryMode = false;
     let unsubscribeFirestoreMat = null;
 
+    // ===== 공통 유틸 =====
+    function esc(v) {
+        return String(v === null || v === undefined ? '' : v)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    // onclick="fn('...')" 처럼 HTML 속성 안의 JS 문자열에 넣을 때 사용
+    function jsAttr(v) {
+        return esc(String(v === null || v === undefined ? '' : v)
+            .replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r?\n/g, ' '));
+    }
+    const QTY_EPS = 1e-9;
+
+    // ===== 동시 저장 충돌 방지 (낙관적 잠금) =====
+    let localRev = null;
+    class SaveError extends Error {
+        constructor(msg) { super(msg); this.isSaveError = true; }
+    }
+    window.addEventListener('unhandledrejection', function(ev) {
+        if (ev.reason && ev.reason.isSaveError) ev.preventDefault();
+    });
+
+    function applyRemoteDoc(doc) {
+        const data = doc.data();
+        isUpdatingFromRemote = true;
+        try {
+            localRev = data.rev || 0;
+            inventory = Array.isArray(data.inventory) ? data.inventory : [];
+            historyLogs = Array.isArray(data.historyLogs) ? data.historyLogs : [];
+            deletedHistoryLogs = Array.isArray(data.deletedHistoryLogs) ? data.deletedHistoryLogs : [];
+            deletedInventoryItems = Array.isArray(data.deletedInventoryItems) ? data.deletedInventoryItems : [];
+
+            localStorage.setItem('my_inventory_data_v2', JSON.stringify(inventory));
+            localStorage.setItem('my_inventory_history_v2', JSON.stringify(historyLogs));
+            localStorage.setItem('my_deleted_history_v2', JSON.stringify(deletedHistoryLogs));
+            localStorage.setItem('my_deleted_inventory_v2', JSON.stringify(deletedInventoryItems));
+
+            renderApp();
+        } finally {
+            isUpdatingFromRemote = false;
+        }
+    }
+
+    async function reloadFromServer() {
+        try {
+            const doc = await store.collection('inventory_system').doc('main_data').get({ source: 'server' });
+            if (doc.exists) applyRemoteDoc(doc);
+        } catch (e) {
+            console.warn('서버 재조회 실패:', e);
+        }
+    }
+
     function setupMatFirestoreSync() {
         if (isReadOnlyHistoryMode) return;
         if (unsubscribeFirestoreMat) unsubscribeFirestoreMat();
 
+        localRev = null;
         unsubscribeFirestoreMat = store.collection('inventory_system').doc('main_data').onSnapshot((doc) => {
-            if (doc.exists && !isReadOnlyHistoryMode) {
-                const data = doc.data();
-                isUpdatingFromRemote = true;
-
-                inventory = Array.isArray(data.inventory) ? data.inventory : [];
-                historyLogs = Array.isArray(data.historyLogs) ? data.historyLogs : [];
-                deletedHistoryLogs = Array.isArray(data.deletedHistoryLogs) ? data.deletedHistoryLogs : [];
-                deletedInventoryItems = Array.isArray(data.deletedInventoryItems) ? data.deletedInventoryItems : [];
-
-                localStorage.setItem('my_inventory_data_v2', JSON.stringify(inventory));
-                localStorage.setItem('my_inventory_history_v2', JSON.stringify(historyLogs));
-                localStorage.setItem('my_deleted_history_v2', JSON.stringify(deletedHistoryLogs));
-                localStorage.setItem('my_deleted_inventory_v2', JSON.stringify(deletedInventoryItems));
-
-                renderApp();
-                isUpdatingFromRemote = false;
+            if (isReadOnlyHistoryMode) return;
+            if (doc.exists) {
+                applyRemoteDoc(doc);
+            } else {
+                localRev = 0; // 최초 사용: 아직 문서가 없음
             }
         }, (error) => {
             console.error("파이어스토어 실시간 연동 오류:", error);
@@ -1239,30 +1281,60 @@
 
     async function saveData() {
         if (isReadOnlyUser || isReadOnlyHistoryMode) return;
-        try {
-            syncCurrentStockLogs(); 
-            
-            if (!Array.isArray(inventory)) inventory = [];
-            if (!Array.isArray(historyLogs)) historyLogs = [];
-            if (!Array.isArray(deletedHistoryLogs)) deletedHistoryLogs = [];
-            if (!Array.isArray(deletedInventoryItems)) deletedInventoryItems = [];
 
+        syncCurrentStockLogs();
+
+        if (!Array.isArray(inventory)) inventory = [];
+        if (!Array.isArray(historyLogs)) historyLogs = [];
+        if (!Array.isArray(deletedHistoryLogs)) deletedHistoryLogs = [];
+        if (!Array.isArray(deletedInventoryItems)) deletedInventoryItems = [];
+
+        try {
             localStorage.setItem('my_inventory_data_v2', JSON.stringify(inventory));
             localStorage.setItem('my_inventory_history_v2', JSON.stringify(historyLogs));
             localStorage.setItem('my_deleted_history_v2', JSON.stringify(deletedHistoryLogs));
             localStorage.setItem('my_deleted_inventory_v2', JSON.stringify(deletedInventoryItems));
+        } catch (e) {
+            console.warn('로컬 저장 경고:', e);
+        }
 
-            if (!isUpdatingFromRemote) {
-                await store.collection('inventory_system').doc('main_data').set({
+        if (isUpdatingFromRemote) return;
+
+        if (localRev === null) {
+            alert('⏳ 서버와 아직 동기화 중입니다. 잠시 후 다시 시도해 주세요.');
+            await reloadFromServer();
+            throw new SaveError('not-synced');
+        }
+
+        const ref = store.collection('inventory_system').doc('main_data');
+        try {
+            await store.runTransaction(async (tx) => {
+                const snap = await tx.get(ref);
+                const remoteRev = snap.exists ? (snap.data().rev || 0) : 0;
+                if (remoteRev !== localRev) {
+                    const err = new Error('rev-conflict');
+                    err.code = 'rev-conflict';
+                    throw err;
+                }
+                tx.set(ref, {
                     inventory: inventory,
                     historyLogs: historyLogs,
                     deletedHistoryLogs: deletedHistoryLogs,
                     deletedInventoryItems: deletedInventoryItems,
-                    updatedAt: new Date().toISOString()
+                    updatedAt: new Date().toISOString(),
+                    rev: remoteRev + 1
                 });
-            }
+            });
+            localRev = localRev + 1;
         } catch (e) {
-            console.warn("저장 중 경고/오류 발생:", e);
+            if (e && e.code === 'rev-conflict') {
+                alert('⚠️ 다른 사용자가 먼저 데이터를 저장했습니다.\n방금 작업은 반영되지 않았습니다. 최신 데이터로 다시 불러왔으니 확인 후 다시 시도해 주세요.');
+            } else {
+                console.error('서버 저장 실패:', e);
+                alert('❌ 서버 저장에 실패했습니다. 네트워크/권한을 확인해 주세요.\n최신 서버 데이터로 다시 불러옵니다.');
+            }
+            await reloadFromServer();
+            throw new SaveError(e && e.message);
         }
     }
 
@@ -1484,8 +1556,12 @@
         if (!name || !name.trim()) return;
 
         const codeInput = prompt(`품목코드를 확인/수정하세요 (중복 불가):`, autoCode);
-        const code = codeInput ? codeInput.trim() : autoCode;
+        const code = (codeInput && codeInput.trim()) ? codeInput.trim() : autoCode;
 
+        if (deletedInventoryItems.some(i => i.code === code)) {
+            alert(`⚠️ 삭제 보관함에 같은 품목코드(${code})가 있습니다. 복원 시 충돌하므로 다른 코드를 사용해 주세요.`);
+            return;
+        }
         if (inventory.some(i => i.code === code)) {
             alert(`⚠️ 이미 존재하는 품목코드(${code})입니다. 중복된 코드는 등록할 수 없습니다.`);
             return;
@@ -1534,6 +1610,8 @@
 
         const reader = new FileReader();
         reader.onload = async function(e) {
+            const backupInv = JSON.parse(JSON.stringify(inventory));
+            const backupLogs = JSON.parse(JSON.stringify(historyLogs));
             try {
                 const data = new Uint8Array(e.target.result);
                 const workbook = XLSX.read(data, { type: 'array', cellDates: true, cellFormulas: true });
@@ -1573,12 +1651,15 @@
                     else {
                         let userInput = prompt("소속 팀명을 선택해주세요:", "소방팀");
                         if (!userInput) return; 
-                        defaultTeam = userInput;
+                        defaultTeam = userInput.trim();
                     }
                 } else if (currentTeam !== 'ALL' && currentTeam !== defaultTeam) defaultTeam = currentTeam; 
 
                 let addedCount = 0;
                 let updatedCount = 0;
+                let qtyUpdatedCount = 0;
+                let renamedCount = 0;
+                const hasQtyCol = ['현재재고', '재고현황', '재고', '수량'].some(k => headers.includes(k));
                 let todayDate = new Date().toISOString().split('T')[0];
                 let sessionUsedCodes = new Set();
 
@@ -1596,7 +1677,7 @@
                     let name = String(nameRaw).trim();
                     if (spec && String(spec).trim() !== '' && String(spec).toLowerCase() !== 'nan') name += ` (${String(spec).trim()})`;
 
-                    let team = rowData['담당팀'] || rowData['팀'] || defaultTeam;
+                    let team = String(rowData['담당팀'] || rowData['팀'] || defaultTeam).trim();
                     let code = String(rowData['품목코드'] || rowData['코드'] || '').trim();
                     
                     if (!code) {
@@ -1611,12 +1692,27 @@
                     let qty = parseQuantityByUnit(qtyRaw, unit);
                     let safeQty = parseQuantityByUnit(rowData['안전재고'] || 5, unit);
 
+                    // 삭제 보관함에만 있는 코드와 겹치면 새 코드 부여 (복원 시 중복 방지)
+                    if (!inventory.some(item => item.code === code) && deletedInventoryItems.some(d => d.code === code)) {
+                        code = getNextItemCode(team, sessionUsedCodes);
+                        sessionUsedCodes.add(code);
+                        renamedCount++;
+                    }
+
                     const existingIndex = inventory.findIndex(item => item.code === code);
                     if (existingIndex > -1) {
                         inventory[existingIndex].team = team;
                         inventory[existingIndex].name = name;
                         inventory[existingIndex].unit = unit;
                         inventory[existingIndex].safeQty = safeQty;
+                        // 엑셀에 재고 열이 있으면 수량도 갱신
+                        if (hasQtyCol && inventory[existingIndex].qty !== qty) {
+                            inventory[existingIndex].qty = qty;
+                            qtyUpdatedCount++;
+                            if (qty > 0 && !historyLogs.some(h => h.code === code && h.type === 'current')) {
+                                historyLogs.push({ id: 'hist_' + Date.now() + '_' + Math.floor(Math.random() * 10000), date: todayDate, team: team, type: 'current', code: code, name: name, qty: qty, unit: unit, worker: '엑셀 재고 갱신' });
+                            }
+                        }
                         updatedCount++;
                     } else {
                         inventory.push({ team, code, name, unit, qty, safeQty });
@@ -1630,9 +1726,15 @@
                         addedCount++;
                     }
                 }
-                alert(`📊 자재 목록 엑셀 업로드 완료!\n* [${defaultTeam}] 소속으로 등록/연동 완료.\n- 신규 등록: ${addedCount}건\n- 업데이트: ${updatedCount}건`);
-                await saveData(); renderApp(); event.target.value = ''; 
-            } catch (err) { alert('오류가 발생했습니다.'); console.error(err); }
+                await saveData();
+                alert(`📊 자재 목록 엑셀 업로드 완료!\n* [${defaultTeam}] 소속으로 등록/연동 완료.\n- 신규 등록: ${addedCount}건\n- 업데이트: ${updatedCount}건 (재고 수량 반영: ${qtyUpdatedCount}건)${renamedCount ? `\n- 삭제 보관함 코드와 겹쳐 새 코드 부여: ${renamedCount}건` : ''}`);
+                renderApp(); event.target.value = '';
+} catch (err) {
+                event.target.value = '';
+                if (err && err.isSaveError) return; // 저장 실패: 서버 최신 데이터로 이미 복구됨
+                inventory = backupInv; historyLogs = backupLogs; // 도중 오류 시 메모리 변경분 롤백
+                alert('오류가 발생했습니다. 변경 내용은 반영되지 않았습니다.'); console.error(err);
+            }
         };
         reader.readAsArrayBuffer(file);
     }
@@ -1747,8 +1849,8 @@
                 });
 
                 if (addedCount > 0) {
-                    alert(`📜 이력 엑셀 업로드 완료!\n* 총 ${addedCount}건의 입출고 내역이 추가되었습니다.`);
-                    await saveData(); renderApp();
+                    await saveData();
+                    alert(`📜 이력 엑셀 업로드 완료!\n* 총 ${addedCount}건의 입출고 내역이 추가되었습니다.`); renderApp();
                 } else alert('새로 추가할 이력 데이터가 없습니다.');
                 event.target.value = ''; 
             } catch (err) { alert('오류가 발생했습니다.'); console.error(err); }
@@ -1884,7 +1986,7 @@
                 return;
             }
 
-            if (type === 'out' && item.qty < qty) {
+            if (type === 'out' && item.qty < qty - QTY_EPS) {
                 alert('출고 수량이 현재고보다 많습니다!');
                 return;
             }
@@ -1944,6 +2046,11 @@
         const trimmedCode = newCode.trim();
         if (!trimmedCode) {
             alert('품목코드는 공백일 수 없습니다.');
+            return;
+        }
+
+        if (trimmedCode !== oldCode && deletedInventoryItems.some(i => i.code === trimmedCode)) {
+            alert(`⚠️ 삭제 보관함에 같은 품목코드(${trimmedCode})가 있어 사용할 수 없습니다.`);
             return;
         }
 
@@ -2215,8 +2322,8 @@
                 }
             });
             historyLogs = historyLogs.filter(h => !targetIds.includes(h.id));
-            alert(`${targetIds.length}개 이력이 삭제 보관함으로 이동되었습니다.`);
             await saveData();
+            alert(`${targetIds.length}개 이력이 삭제 보관함으로 이동되었습니다.`);
             const sAll = document.getElementById('selectAllHistoryCheckbox');
             if (sAll) sAll.checked = false;
             renderApp();
@@ -2243,7 +2350,7 @@
         }
 
         if (targetDeletedLogs.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="9" style="color:#94a3b8; padding:30px;">[${currentTeam === 'ALL' ? '전체' : currentTeam}] 삭제된 이력이 없습니다.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="9" style="color:#94a3b8; padding:30px;">[${currentTeam === 'ALL' ? '전체' : esc(currentTeam)}] 삭제된 이력이 없습니다.</td></tr>`;
             return;
         }
 
@@ -2258,12 +2365,12 @@
                 <td class="checkbox-cell"><input type="checkbox" class="row-checkbox restore-checkbox" value="${h.id}"></td>
                 <td style="color:#64748b; font-size:12px;">${h.deletedAt || '-'}</td>
                 <td>${h.date}</td>
-                <td><strong>${h.team}</strong></td>
+                <td><strong>${esc(h.team)}</strong></td>
                 <td>${badge}</td>
-                <td>${h.code}</td>
-                <td style="text-align:left; font-weight:bold;">${h.name}</td>
-                <td>${h.qty} ${h.unit || ''}</td>
-                <td style="text-align:left;">${h.worker || '-'}</td>
+                <td>${esc(h.code)}</td>
+                <td style="text-align:left; font-weight:bold;">${esc(h.name)}</td>
+                <td>${h.qty} ${esc(h.unit || '')}</td>
+                <td style="text-align:left;">${esc(h.worker || '-')}</td>
             `;
             tbody.appendChild(tr);
         });
@@ -2306,8 +2413,8 @@
                 }
             });
 
-            alert(`${ids.length}개 이력이 복원되었습니다.`);
             await saveData();
+            alert(`${ids.length}개 이력이 복원되었습니다.`);
             renderApp();
             renderRestoreModal();
             const sAll = document.getElementById('selectAllRestoreCheckbox');
@@ -2331,8 +2438,8 @@
                 if (idx > -1) deletedHistoryLogs.splice(idx, 1);
             });
 
-            alert('보관함에서 완전히 삭제되었습니다.');
             await saveData();
+            alert('보관함에서 완전히 삭제되었습니다.');
             renderRestoreModal();
             const sAll = document.getElementById('selectAllRestoreCheckbox');
             if (sAll) sAll.checked = false;
@@ -2363,19 +2470,19 @@
         }
 
         if (targetDeletedInv.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="8" style="color:#94a3b8; padding:30px;">[${currentTeam === 'ALL' ? '전체' : currentTeam}] 삭제된 자재가 없습니다.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="8" style="color:#94a3b8; padding:30px;">[${currentTeam === 'ALL' ? '전체' : esc(currentTeam)}] 삭제된 자재가 없습니다.</td></tr>`;
             return;
         }
 
         targetDeletedInv.forEach(item => {
             const tr = document.createElement('tr');
             tr.innerHTML = `
-                <td class="checkbox-cell"><input type="checkbox" class="row-checkbox inv-restore-checkbox" value="${item.code}"></td>
+                <td class="checkbox-cell"><input type="checkbox" class="row-checkbox inv-restore-checkbox" value="${esc(item.code)}"></td>
                 <td style="color:#64748b; font-size:12px;">${item.deletedAt || '-'}</td>
-                <td><strong>${item.team}</strong></td>
-                <td>${item.code}</td>
-                <td style="text-align:left; font-weight:bold;">${item.name}</td>
-                <td>${item.unit}</td>
+                <td><strong>${esc(item.team)}</strong></td>
+                <td>${esc(item.code)}</td>
+                <td style="text-align:left; font-weight:bold;">${esc(item.name)}</td>
+                <td>${esc(item.unit)}</td>
                 <td>${item.qty}</td>
                 <td>${item.safeQty}</td>
             `;
@@ -2398,10 +2505,12 @@
         const codes = Array.from(chks).map(cb => cb.value);
 
         if (confirm(`선택한 ${codes.length}개의 자재와 관련된 입출고 내역을 함께 복원하시겠습니까?`)) {
+            const skippedCodes = [];
             codes.forEach(code => {
                 const idx = deletedInventoryItems.findIndex(i => i.code === code);
                 if (idx > -1) {
                     const item = deletedInventoryItems[idx];
+                    if (inventory.some(i => i.code === code)) { skippedCodes.push(code); return; }
                     delete item.deletedAt;
                     inventory.push(item);
                     deletedInventoryItems.splice(idx, 1);
@@ -2415,8 +2524,8 @@
                 }
             });
 
-            alert(`${codes.length}개의 자재 및 관련 입출고 내역이 목록으로 복원되었습니다.`);
             await saveData();
+            alert(`${codes.length - skippedCodes.length}개의 자재 및 관련 입출고 내역이 목록으로 복원되었습니다.` + (skippedCodes.length ? `\n\n⚠️ 현재 목록에 같은 코드가 이미 있어 복원하지 않은 품목: ${skippedCodes.join(', ')}` : ''));
             renderApp();
             renderInvRestoreModal();
             const sAll = document.getElementById('selectAllInvRestoreCheckbox');
@@ -2440,8 +2549,8 @@
                 if (idx > -1) deletedInventoryItems.splice(idx, 1);
             });
 
-            alert('보관함에서 완전히 삭제되었습니다.');
             await saveData();
+            alert('보관함에서 완전히 삭제되었습니다.');
             renderInvRestoreModal();
             const sAll = document.getElementById('selectAllInvRestoreCheckbox');
             if (sAll) sAll.checked = false;
@@ -2489,36 +2598,36 @@
                 const isWarn = item.qty < item.safeQty;
                 const stat = isWarn ? '<span class="status-badge status-warning">재고부족</span>' : '<span class="status-badge status-normal">적정</span>';
                 tr.innerHTML = `
-                    <td class="checkbox-cell"><input type="checkbox" class="row-checkbox item-checkbox" value="${item.code}"></td>
-                    <td><span style="font-weight:bold; color:#475569;">${item.team}</span></td>
+                    <td class="checkbox-cell"><input type="checkbox" class="row-checkbox item-checkbox" value="${esc(item.code)}"></td>
+                    <td><span style="font-weight:bold; color:#475569;">${esc(item.team)}</span></td>
                     <td style="text-align:center; width: 160px;">
                         <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                             <div style="flex-grow: 1; text-align: center;">
-                                <span ondblclick="editItemCode('${item.code}')" title="더블클릭 시 품목코드 수정" style="cursor:pointer;">${item.code}</span>
+                                <span ondblclick="editItemCode('${jsAttr(item.code)}')" title="더블클릭 시 품목코드 수정" style="cursor:pointer;">${esc(item.code)}</span>
                             </div>
-                            <button class="btn-action" style="padding: 2px 6px; font-size: 11px; background-color: #64748b; color: white; flex-shrink: 0;" onclick="editItemCode('${item.code}')" title="품목코드 수정">수정</button>
+                            <button class="btn-action" style="padding: 2px 6px; font-size: 11px; background-color: #64748b; color: white; flex-shrink: 0;" onclick="editItemCode('${jsAttr(item.code)}')" title="품목코드 수정">수정</button>
                         </div>
                     </td>
                     <td style="text-align:center;">
                         <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                             <div style="flex-grow: 1; text-align: center;">
-                                <span class="item-link" onclick="goToHistoryOf('${item.name}', '${item.code}')" ondblclick="editItemName('${item.code}', '${item.name}')" title="클릭 시 이력 이동 / 더블클릭 시 자재명 수정">${item.name}</span>
+                                <span class="item-link" onclick="goToHistoryOf('${jsAttr(item.name)}', '${jsAttr(item.code)}')" ondblclick="editItemName('${jsAttr(item.code)}', '${jsAttr(item.name)}')" title="클릭 시 이력 이동 / 더블클릭 시 자재명 수정">${esc(item.name)}</span>
                             </div>
-                            <button class="btn-action" style="padding: 2px 6px; font-size: 11px; background-color: #64748b; color: white; flex-shrink: 0;" onclick="editItemName('${item.code}', '${item.name}')" title="자재명 수정">수정</button>
+                            <button class="btn-action" style="padding: 2px 6px; font-size: 11px; background-color: #64748b; color: white; flex-shrink: 0;" onclick="editItemName('${jsAttr(item.code)}', '${jsAttr(item.name)}')" title="자재명 수정">수정</button>
                         </div>
                     </td>
                     <td style="text-align:center;">
                         <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                             <div style="flex-grow: 1; text-align: center;">
-                                <span ondblclick="editItemUnit('${item.code}', '${item.unit}')" title="더블클릭 시 단위 수정" style="cursor:pointer;">${item.unit}</span>
+                                <span ondblclick="editItemUnit('${jsAttr(item.code)}', '${jsAttr(item.unit)}')" title="더블클릭 시 단위 수정" style="cursor:pointer;">${esc(item.unit)}</span>
                             </div>
-                            <button class="btn-action" style="padding: 2px 6px; font-size: 11px; background-color: #64748b; color: white; flex-shrink: 0;" onclick="editItemUnit('${item.code}', '${item.unit}')" title="단위 수정">수정</button>
+                            <button class="btn-action" style="padding: 2px 6px; font-size: 11px; background-color: #64748b; color: white; flex-shrink: 0;" onclick="editItemUnit('${jsAttr(item.code)}', '${jsAttr(item.unit)}')" title="단위 수정">수정</button>
                         </div>
                     </td>
                     <td style="${isWarn ? 'color:#ef4444; font-weight:bold;' : ''}">${item.qty}</td>
                     <td style="color:#94a3b8;">${item.safeQty}</td>
                     <td>${stat}</td>
-                    <td class="col-action"><button class="btn-delete" onclick="deleteItem('${item.code}', '${item.name}')">삭제</button></td>
+                    <td class="col-action"><button class="btn-delete" onclick="deleteItem('${jsAttr(item.code)}', '${jsAttr(item.name)}')">삭제</button></td>
                 `;
                 tbody.appendChild(tr);
             });
@@ -2566,7 +2675,7 @@
         document.getElementById('dash-warning-items').innerText = wItems.length;
         const wDiv = document.getElementById('dashboard-warnings');
         if (wItems.length > 0) {
-            wDiv.innerHTML = wItems.map(i => `<p style="margin: 6px 0; color:#b45309;">⚠️ <strong>[${i.team}] ${i.name}</strong> 부족. (현재: ${i.qty}${i.unit} / 안전: ${i.safeQty}${i.unit})</p>`).join('');
+            wDiv.innerHTML = wItems.map(i => `<p style="margin: 6px 0; color:#b45309;">⚠️ <strong>[${esc(i.team)}] ${esc(i.name)}</strong> 부족. (현재: ${i.qty}${esc(i.unit)} / 안전: ${i.safeQty}${esc(i.unit)})</p>`).join('');
             wDiv.style.display = 'block';
         } else {
             wDiv.innerHTML = '<p style="margin:0; color:#15803d;">✅ 모든 재고 적정.</p>';
@@ -2635,12 +2744,12 @@
             tr.innerHTML = `
                 <td class="checkbox-cell">${checkboxHtml}</td>
                 <td>${h.date}</td>
-                <td><strong>${h.team}</strong></td>
+                <td><strong>${esc(h.team)}</strong></td>
                 <td>${badge}</td>
-                <td>${h.code}</td>
-                <td style="text-align:left; font-weight:bold;">${h.name}</td>
-                <td>${h.qty} ${h.unit || ''}</td>
-                <td style="text-align:left;">${h.worker || '-'}</td>
+                <td>${esc(h.code)}</td>
+                <td style="text-align:left; font-weight:bold;">${esc(h.name)}</td>
+                <td>${h.qty} ${esc(h.unit || '')}</td>
+                <td style="text-align:left;">${esc(h.worker || '-')}</td>
                 <td class="col-action" style="white-space: nowrap;">${actionBtnsHtml}</td>
             `;
             tbody.appendChild(tr);
@@ -2687,12 +2796,12 @@
 
             tr.innerHTML = `
                 <td>${h.date}</td>
-                <td><strong>${h.team}</strong></td>
+                <td><strong>${esc(h.team)}</strong></td>
                 <td>${badge}</td>
-                <td>${h.code}</td>
-                <td style="text-align:left; font-weight:bold;">${h.name}</td>
-                <td>${h.qty} ${h.unit || ''}</td>
-                <td style="text-align:left;">${h.worker || '-'}</td>
+                <td>${esc(h.code)}</td>
+                <td style="text-align:left; font-weight:bold;">${esc(h.name)}</td>
+                <td>${h.qty} ${esc(h.unit || '')}</td>
+                <td style="text-align:left;">${esc(h.worker || '-')}</td>
             `;
             tbody.appendChild(tr);
         });
@@ -2733,8 +2842,8 @@
                 return true;
             });
 
-            alert(`${chks.length}개 자재 및 관련 이력이 삭제 보관함으로 이동되었습니다.`); 
             await saveData();
+            alert(`${chks.length}개 자재 및 관련 이력이 삭제 보관함으로 이동되었습니다.`);
             const sAll = document.getElementById('selectAllCheckbox'); 
             if (sAll) sAll.checked = false;
             renderApp();
