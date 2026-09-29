@@ -469,6 +469,17 @@
             color: #64748b;
             white-space: nowrap;
         }
+        .print-period-range { display: none; }
+        .period-sort-button {
+            margin-left: 5px;
+            padding: 3px 7px;
+            border: 1px solid #cbd5e1;
+            border-radius: 5px;
+            background: #f8fafc;
+            color: #334155;
+            font-size: 11px;
+            cursor: pointer;
+        }
 
         .print-approval-table {
             border-collapse: collapse !important;
@@ -531,6 +542,10 @@
             th, td { border: 1px solid #333 !important; padding: 8px 6px !important; font-size: 9pt !important; }
             th { background-color: #eee !important; color: #000 !important; }
             h2 { border-bottom: 1px solid #000 !important; font-size: 13pt !important; margin-top: 20px !important; }
+            .print-period-range { display: inline !important; margin-left: 8px; font-size: 10pt; font-weight: normal; }
+            .period-sort-button, #period-sort-date, #period-sort-team, #period-sort-type, #period-sort-code, #period-sort-name {
+                display: none !important;
+            }
         }
     </style>
 </head>
@@ -800,7 +815,7 @@
 
         <!-- 4. 기간별 입출고 종합 검색 페이지 -->
         <div id="PeriodSearch" class="tab-content">
-            <h2>기간별 입출고 종합 검색 <span class="team-badge" id="period-team-badge">전체 보기</span></h2>
+            <h2>기간별 입출고 종합 검색 <span class="team-badge" id="period-team-badge">전체 보기</span><span id="period-print-range" class="print-period-range"></span></h2>
 
             <div class="search-bar-container" style="background-color: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #cbd5e1;">
                 <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; width: 100%;">
@@ -850,11 +865,11 @@
             <table>
                 <thead>
                     <tr>
-                        <th>일시</th>
-                        <th>담당 팀</th>
-                        <th>구분</th>
-                        <th>품목코드</th>
-                        <th>자재명</th>
+                        <th>일시<button class="period-sort-button" onclick="sortPeriodSearch('date')">정렬</button><span id="period-sort-date">↓</span></th>
+                        <th>담당팀<button class="period-sort-button" onclick="sortPeriodSearch('team')">정렬</button><span id="period-sort-team"></span></th>
+                        <th>구분<button class="period-sort-button" onclick="sortPeriodSearch('type')">정렬</button><span id="period-sort-type"></span></th>
+                        <th>품목코드<button class="period-sort-button" onclick="sortPeriodSearch('code')">정렬</button><span id="period-sort-code"></span></th>
+                        <th>자재명<button class="period-sort-button" onclick="sortPeriodSearch('name')">정렬</button><span id="period-sort-name"></span></th>
                         <th>수량</th>
                         <th>작업자/비고</th>
                     </tr>
@@ -984,6 +999,8 @@
     let isReadOnlyUser = false; // 읽기 전용 계정 여부 플래그
     let isInitialLoadMat = true;
     let codeSortAsc = true;
+    let periodSortKey = 'date';
+    let periodSortDirection = 'desc';
 
     // 파이어베이스에서 관리자 비밀번호 원격 실시간 동기화
     database.ref('system password').on('value', (snapshot) => {
@@ -1313,15 +1330,40 @@
 
     function printPage() {
         document.getElementById('print-date-info').innerText = `출력일자: ${todayStr()} | 담당 팀: ${currentTeam === 'ALL' ? '전체 파트' : currentTeam}`;
+        const periodRange = document.getElementById('period-print-range');
+        const isPeriodSearch = document.getElementById('PeriodSearch')?.classList.contains('active');
+        if (periodRange) {
+            if (isPeriodSearch) {
+                const startDate = document.getElementById('search-start-date')?.value || '';
+                const endDate = document.getElementById('search-end-date')?.value || '';
+                periodRange.textContent = `검색기간 ${startDate.replace(/-/g, '/')}~${endDate.replace(/-/g, '/')}`;
+            } else {
+                periodRange.textContent = '';
+            }
+        }
         window.print();
     }
 
     // PDF 저장: 파일을 바로 만들지 않고 인쇄창을 엽니다.
     // 인쇄창의 '대상'을 "PDF로 저장"으로 선택하면 인쇄 미리보기와 똑같은 모양으로 저장됩니다.
     function savePDFPage() {
-        const activeTeamName = currentTeam === 'ALL' ? '전체' : currentTeam;
+        const isPeriodSearch = document.getElementById('PeriodSearch')?.classList.contains('active');
+        let activeTeamName = currentTeam === 'ALL' ? '전체' : currentTeam;
+        let filename = `자재관리대장_${activeTeamName}_${todayStr()}`;
+        if (isPeriodSearch) {
+            if (currentTeam === 'ALL') {
+                activeTeamName = document.getElementById('admin-sub-period-filter')?.value || 'ALL';
+                if (activeTeamName === 'ALL') activeTeamName = '전체';
+            }
+            const periodType = document.getElementById('search-period-type')?.value || 'all';
+            const typeName = { all: '입출고전체', in: '입고', out: '출고', current: '현재재고' }[periodType] || '입출고전체';
+            const startDate = document.getElementById('search-start-date')?.value || '시작일미지정';
+            const endDate = document.getElementById('search-end-date')?.value || '종료일미지정';
+            filename = `${activeTeamName}_${typeName}_${startDate}~${endDate}`;
+        }
+        filename = filename.replace(/[\\/:*?"<>|]/g, '-');
         const prevTitle = document.title;
-        document.title = `자재관리대장_${activeTeamName}_${todayStr()}`;   // PDF 저장 시 기본 파일명
+        document.title = filename;
         window.addEventListener('afterprint', function () { document.title = prevTitle; }, { once: true });
         printPage();
     }
@@ -2754,7 +2796,19 @@
         if (periodType !== 'all') filtered = filtered.filter(h => h.type === periodType);
         if (keyword) filtered = filtered.filter(h => h.name.toLowerCase().includes(keyword) || h.code.toLowerCase().includes(keyword) || (h.worker && h.worker.toLowerCase().includes(keyword)));
 
-        filtered.sort((a, b) => new Date(b.date) - new Date(a.date));
+        filtered.sort((a, b) => {
+            let comparison;
+            if (periodSortKey === 'date') {
+                comparison = new Date(a.date) - new Date(b.date);
+            } else if (periodSortKey === 'type') {
+                const typeNames = { in: '입고', out: '출고', current: '현재재고' };
+                comparison = (typeNames[a.type] || a.type).localeCompare(typeNames[b.type] || b.type, 'ko');
+            } else {
+                comparison = String(a[periodSortKey] || '').localeCompare(String(b[periodSortKey] || ''), 'ko', { numeric: true, sensitivity: 'base' });
+            }
+            return periodSortDirection === 'asc' ? comparison : -comparison;
+        });
+        updatePeriodSortIndicators();
 
         if (filtered.length === 0) {
             tbody.innerHTML = '<tr><td colspan="7" style="color:#94a3b8; padding:30px;">조건에 해당하는 입출고 및 재고 내역이 없습니다.</td></tr>';
@@ -2778,6 +2832,23 @@
                 <td style="text-align:left;">${esc(h.worker || '-')}</td>
             `;
             tbody.appendChild(tr);
+        });
+    }
+
+    function sortPeriodSearch(key) {
+        if (periodSortKey === key) {
+            periodSortDirection = periodSortDirection === 'asc' ? 'desc' : 'asc';
+        } else {
+            periodSortKey = key;
+            periodSortDirection = key === 'date' ? 'desc' : 'asc';
+        }
+        renderPeriodSearch();
+    }
+
+    function updatePeriodSortIndicators() {
+        ['date', 'team', 'type', 'code', 'name'].forEach(key => {
+            const indicator = document.getElementById(`period-sort-${key}`);
+            if (indicator) indicator.textContent = key === periodSortKey ? (periodSortDirection === 'asc' ? '↑' : '↓') : '';
         });
     }
 
