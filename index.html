@@ -594,7 +594,7 @@
         <button class="btn-action btn-export" onclick="exportBackup()">📂 백업 (다운로드)</button>
         <button class="btn-action btn-import" onclick="document.getElementById('file-input').click()">📥 백업 복원 / 이력 조회</button>
         <input type="file" id="file-input" style="display:none;" accept=".json" onchange="importBackup(event)">
-        <button class="btn-action btn-print" onclick="printPage()">🖨️ 인쇄</button>
+        <button class="btn-action btn-print" onclick="printPage()">🖨️️ 인쇄</button>
         <button class="btn-action btn-pdf" onclick="savePDFPage()" title="인쇄창이 열리면 대상을 'PDF로 저장'으로 선택하세요">📄 PDF 저장</button>
     </div>
 </div>
@@ -612,7 +612,7 @@
         <div class="print-header-info">
             <div>
                 <h1>현장 자재 관리 보고서</h1>
-                <p id="print-date-info">출력일자: 2026-08-05 | 담당 팀: 전체</p>
+                <p id="print-date-info">출력일자: 2026-08-05 | 담당 팀: 전체 <span id="print-header-period" style="margin-left: 8px;"></span></p>
             </div>
             <table class="print-approval-table">
                 <tr>
@@ -1089,7 +1089,7 @@
                 document.getElementById('backup-readonly-banner').style.display = 'flex';
                 document.getElementById('banner-return-btn').style.display = 'none';
                 document.getElementById('backup-readonly-banner').querySelector('span').innerText = 
-                    '⚠️ 현재 [읽기 전용 모드]로 접속 중입니다. (조회, 인쇄 및 PDF 출력만 가능합니다)';
+                    '⚠️️ 현재 [읽기 전용 모드]로 접속 중입니다. (조회, 인쇄 및 PDF 출력만 가능합니다)';
                 const saveBtn = document.getElementById('btn_save_mat');
                 if(saveBtn) {
                     saveBtn.style.opacity = '0.5';
@@ -1151,7 +1151,6 @@
             .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
-    // onclick="fn('...')" 처럼 HTML 속성 안의 JS 문자열에 넣을 때 사용
     function jsAttr(v) {
         return esc(String(v === null || v === undefined ? '' : v)
             .replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r?\n/g, ' '));
@@ -1175,7 +1174,7 @@
         const data = doc.data();
         isUpdatingFromRemote = true;
         try {
-            if (localRev !== null && (data.rev || 0) < localRev) return;   // 오래된 스냅샷 무시
+            if (localRev !== null && (data.rev || 0) < localRev) return;   
             localRev = data.rev || 0;
             inventory = Array.isArray(data.inventory) ? data.inventory : [];
             historyLogs = Array.isArray(data.historyLogs) ? data.historyLogs : [];
@@ -1212,7 +1211,7 @@
             if (doc.exists) {
                 applyRemoteDoc(doc);
             } else {
-                localRev = 0; // 최초 사용: 아직 문서가 없음
+                localRev = 0; 
             }
         }, (error) => {
             console.error("파이어스토어 실시간 연동 오류:", error);
@@ -1329,22 +1328,33 @@
     }
 
     function printPage(shouldPrint = true) {
-        document.getElementById('print-date-info').innerText = `출력일자: ${todayStr()} | 담당 팀: ${currentTeam === 'ALL' ? '전체 파트' : currentTeam}`;
-        const periodRange = document.getElementById('period-print-range');
         const isPeriodSearch = document.getElementById('PeriodSearch')?.classList.contains('active');
-        if (periodRange) {
-            if (isPeriodSearch) {
-                const startDate = document.getElementById('search-start-date')?.value || '';
-                const endDate = document.getElementById('search-end-date')?.value || '';
-                periodRange.textContent = `검색기간 ${startDate.replace(/-/g, '/')}~${endDate.replace(/-/g, '/')}`;
-            } else {
-                periodRange.textContent = '';
+        const startDate = document.getElementById('search-start-date')?.value || '';
+        const endDate = document.getElementById('search-end-date')?.value || '';
+        
+        let periodText = '';
+        if (isPeriodSearch && (startDate || endDate)) {
+            const startFmt = startDate ? startDate.replace(/-/g, '/') : '';
+            const endFmt = endDate ? endDate.replace(/-/g, '/') : '';
+            periodText = `| 검색기간: ${startFmt}~${endFmt}`;
+            
+            const periodRangeEl = document.getElementById('period-print-range');
+            if (periodRangeEl) {
+                periodRangeEl.textContent = `검색기간 ${startFmt}~${endFmt}`;
             }
+        } else {
+            const periodRangeEl = document.getElementById('period-print-range');
+            if (periodRangeEl) periodRangeEl.textContent = '';
         }
+
+        const dateInfoEl = document.getElementById('print-date-info');
+        if (dateInfoEl) {
+            dateInfoEl.innerText = `출력일자: ${todayStr()} | 담당 팀: ${currentTeam === 'ALL' ? '전체' : currentTeam} ${periodText}`;
+        }
+
         if (shouldPrint) window.print();
     }
 
-    // 💡 [수정된 부분] PDF 저장: 부모 창(통합포털 메인)의 제목을 directement 변경하는 방식
     function savePDFPage() {
         const isPeriodSearch = document.getElementById('PeriodSearch')?.classList.contains('active');
         let activeTeamName = currentTeam === 'ALL' ? '전체' : currentTeam;
@@ -1368,10 +1378,8 @@
         const prevTitle = document.title;
         let parentPrevTitle = '';
 
-        // 1. 자재관리대장 내부 문서 제목 변경
         document.title = filename;
 
-        // 2. 부모 창(통합포털 메인)의 제목도 직접 강제 변경
         try {
             if (window.parent && window.parent.document) {
                 parentPrevTitle = window.parent.document.title;
@@ -1381,10 +1389,8 @@
             console.log(e);
         }
 
-        // 3. 인쇄/PDF 미리보기 창 출력
-        window.print();
+        printPage(true);
 
-        // 4. 창이 닫힌 뒤 원래 문서 제목으로 안전하게 복구
         setTimeout(() => {
             document.title = prevTitle;
             try {
@@ -1730,7 +1736,6 @@
                     const safeGiven = safeCellRaw !== undefined;
                     let safeQty = safeGiven ? parseQuantityByUnit(safeCellRaw, unit) : 5;
 
-                    // 삭제 보관함에만 있는 코드와 겹치면 새 코드 부여 (복원 시 중복 방지)
                     const sameCodeItem = inventory.find(item => item.code === code);
                     if ((!sameCodeItem && deletedInventoryItems.some(d => d.code === code)) || (sameCodeItem && sameCodeItem.team !== team)) {
                         code = getNextItemCode(team, sessionUsedCodes);
@@ -1744,7 +1749,6 @@
                         inventory[existingIndex].name = name;
                         inventory[existingIndex].unit = unit;
                         if (safeGiven) inventory[existingIndex].safeQty = safeQty;
-                        // 엑셀에 재고 열이 있으면 수량도 갱신
                         if (hasQtyCol && qtyGiven && inventory[existingIndex].qty !== qty) {
                             inventory[existingIndex].qty = qty;
                             qtyUpdatedCount++;
@@ -1770,8 +1774,8 @@
                 renderApp(); event.target.value = '';
             } catch (err) {
                 event.target.value = '';
-                if (err && err.isSaveError) return; // 저장 실패: 서버 최신 데이터로 이미 복구됨
-                inventory = backupInv; historyLogs = backupLogs; // 도중 오류 시 메모리 변경분 롤백
+                if (err && err.isSaveError) return; 
+                inventory = backupInv; historyLogs = backupLogs; 
                 alert('오류가 발생했습니다. 변경 내용은 반영되지 않았습니다.'); console.error(err);
             }
         };
@@ -2118,7 +2122,7 @@
 
     async function editItemName(itemCode, currentName) {
         if (isReadOnlyUser) {
-            alert('⚠️ [읽기 전용 모드]에서는 수정할 수 없습니다.');
+            alert('⚠️️ [읽기 전용 모드]에서는 수정할 수 없습니다.');
             return;
         }
         if (isReadOnlyHistoryMode) {
@@ -2192,7 +2196,7 @@
             return;
         }
         if (isReadOnlyHistoryMode) {
-            alert('⚠️️ 과거 백업 조회 모드에서는 수정이 차단됩니다.');
+            alert('⚠️ 과거 백업 조회 모드에서는 수정이 차단됩니다.');
             return;
         }
         const log = historyLogs.find(h => h.id === id);
@@ -2427,7 +2431,7 @@
             return;
         }
         if (isReadOnlyHistoryMode) {
-            alert('⚠️ 과거 백업 조회 모드에서는 복원이 차단됩니다.');
+            alert('⚠️️ 과거 백업 조회 모드에서는 복원이 차단됩니다.');
             return;
         }
         const chks = document.querySelectorAll('.restore-checkbox:checked');
@@ -2824,6 +2828,18 @@
         if (endDate) filtered = filtered.filter(h => h.date <= endDate);
         if (periodType !== 'all') filtered = filtered.filter(h => h.type === periodType);
         if (keyword) filtered = filtered.filter(h => h.name.toLowerCase().includes(keyword) || h.code.toLowerCase().includes(keyword) || (h.worker && h.worker.toLowerCase().includes(keyword)));
+
+        // 인쇄용 기간 표시 업데이트
+        const periodRangeEl = document.getElementById('period-print-range');
+        if (periodRangeEl) {
+            if (startDate || endDate) {
+                const sFmt = startDate ? startDate.replace(/-/g, '/') : '';
+                const eFmt = endDate ? endDate.replace(/-/g, '/') : '';
+                periodRangeEl.textContent = `검색기간 ${sFmt}~${eFmt}`;
+            } else {
+                periodRangeEl.textContent = '';
+            }
+        }
 
         filtered.sort((a, b) => {
             let comparison;
