@@ -1328,7 +1328,7 @@
         alert('💾 현재 자재 및 입출고 데이터가 클라우드 서버에 동기화 저장되었습니다.');
     }
 
-    function printPage() {
+    function printPage(shouldPrint = true) {
         document.getElementById('print-date-info').innerText = `출력일자: ${todayStr()} | 담당 팀: ${currentTeam === 'ALL' ? '전체 파트' : currentTeam}`;
         const periodRange = document.getElementById('period-print-range');
         const isPeriodSearch = document.getElementById('PeriodSearch')?.classList.contains('active');
@@ -1341,31 +1341,60 @@
                 periodRange.textContent = '';
             }
         }
-        window.print();
+        if (shouldPrint) window.print();
     }
 
-    // PDF 저장: 파일을 바로 만들지 않고 인쇄창을 엽니다.
-    // 인쇄창의 '대상'을 "PDF로 저장"으로 선택하면 인쇄 미리보기와 똑같은 모양으로 저장됩니다.
+    // 💡 [수정된 부분] PDF 저장: 부모 창(통합포털 메인)의 제목을 directement 변경하는 방식
     function savePDFPage() {
         const isPeriodSearch = document.getElementById('PeriodSearch')?.classList.contains('active');
         let activeTeamName = currentTeam === 'ALL' ? '전체' : currentTeam;
-        let filename = `자재관리대장_${activeTeamName}_${todayStr()}`;
+        if (currentTeam === 'ALL') {
+            const teamFilterId = isPeriodSearch ? 'admin-sub-period-filter' : 'admin-sub-team-filter';
+            const selectedTeam = document.getElementById(teamFilterId)?.value;
+            if (selectedTeam && selectedTeam !== 'ALL') activeTeamName = selectedTeam;
+        }
+        let filename;
         if (isPeriodSearch) {
-            if (currentTeam === 'ALL') {
-                activeTeamName = document.getElementById('admin-sub-period-filter')?.value || 'ALL';
-                if (activeTeamName === 'ALL') activeTeamName = '전체';
-            }
             const periodType = document.getElementById('search-period-type')?.value || 'all';
             const typeName = { all: '입출고전체', in: '입고', out: '출고', current: '현재재고' }[periodType] || '입출고전체';
             const startDate = document.getElementById('search-start-date')?.value || '시작일미지정';
             const endDate = document.getElementById('search-end-date')?.value || '종료일미지정';
             filename = `${activeTeamName}_${typeName}_${startDate}~${endDate}`;
+        } else {
+            filename = `${activeTeamName}_자재목록_${todayStr()}`;
         }
         filename = filename.replace(/[\\/:*?"<>|]/g, '-');
+
         const prevTitle = document.title;
+        let parentPrevTitle = '';
+
+        // 1. 자재관리대장 내부 문서 제목 변경
         document.title = filename;
-        window.addEventListener('afterprint', function () { document.title = prevTitle; }, { once: true });
-        printPage();
+
+        // 2. 부모 창(통합포털 메인)의 제목도 직접 강제 변경
+        try {
+            if (window.parent && window.parent.document) {
+                parentPrevTitle = window.parent.document.title;
+                window.parent.document.title = filename;
+            }
+        } catch (e) {
+            console.log(e);
+        }
+
+        // 3. 인쇄/PDF 미리보기 창 출력
+        window.print();
+
+        // 4. 창이 닫힌 뒤 원래 문서 제목으로 안전하게 복구
+        setTimeout(() => {
+            document.title = prevTitle;
+            try {
+                if (window.parent && window.parent.document && parentPrevTitle) {
+                    window.parent.document.title = parentPrevTitle;
+                }
+            } catch (e) {
+                console.log(e);
+            }
+        }, 1000);
     }
 
     function exportToExcel() {
@@ -1739,7 +1768,7 @@
                 await saveData();
                 alert(`📊 자재 목록 엑셀 업로드 완료!\n* [${defaultTeam}] 소속으로 등록/연동 완료.\n- 신규 등록: ${addedCount}건\n- 업데이트: ${updatedCount}건 (재고 수량 반영: ${qtyUpdatedCount}건)${renamedCount ? `\n- 삭제 보관함 코드와 겹쳐 새 코드 부여: ${renamedCount}건` : ''}`);
                 renderApp(); event.target.value = '';
-} catch (err) {
+            } catch (err) {
                 event.target.value = '';
                 if (err && err.isSaveError) return; // 저장 실패: 서버 최신 데이터로 이미 복구됨
                 inventory = backupInv; historyLogs = backupLogs; // 도중 오류 시 메모리 변경분 롤백
@@ -2163,7 +2192,7 @@
             return;
         }
         if (isReadOnlyHistoryMode) {
-            alert('⚠️ 과거 백업 조회 모드에서는 수정이 차단됩니다.');
+            alert('⚠️️ 과거 백업 조회 모드에서는 수정이 차단됩니다.');
             return;
         }
         const log = historyLogs.find(h => h.id === id);
