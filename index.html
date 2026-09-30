@@ -12,7 +12,7 @@
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
 
-    <!-- 🛡️ 최상단 강제 보안 스크립트 (우클릭 및 주요 소스보기 단축키 차단) -->
+    <!-- 🛡️️ 최상단 강제 보안 스크립트 (우클릭 및 주요 소스보기 단축키 차단) -->
     <script>
       window.addEventListener('contextmenu', function(e) {
           e.preventDefault();
@@ -594,7 +594,7 @@
         <button class="btn-action btn-export" onclick="exportBackup()">📂 백업 (다운로드)</button>
         <button class="btn-action btn-import" onclick="document.getElementById('file-input').click()">📥 백업 복원 / 이력 조회</button>
         <input type="file" id="file-input" style="display:none;" accept=".json" onchange="importBackup(event)">
-        <button class="btn-action btn-print" onclick="printPage()">🖨️️ 인쇄</button>
+        <button class="btn-action btn-print" onclick="printPage()">🖨 인쇄</button>
         <button class="btn-action btn-pdf" onclick="savePDFPage()" title="인쇄창이 열리면 대상을 'PDF로 저장'으로 선택하세요">📄 PDF 저장</button>
     </div>
 </div>
@@ -612,7 +612,7 @@
         <div class="print-header-info">
             <div>
                 <h1>현장 자재 관리 보고서</h1>
-                <p id="print-date-info">출력일자: 2026-08-05 | 담당 팀: 전체 <span id="print-header-period" style="margin-left: 8px;"></span></p>
+                <p id="print-date-info">출력일자: 2026-08-05 | 담당 팀: 전체</p>
             </div>
             <table class="print-approval-table">
                 <tr>
@@ -929,7 +929,7 @@
             <span style="font-size:14px; color:#475569;">처리할 자재를 선택한 후 버튼을 누르세요.</span>
             <div style="display:flex; gap:6px;">
                 <button class="btn-action btn-save" style="height:36px; padding:0 18px;" onclick="restoreSelectedInvItems()">↺ 선택 자재 복원</button>
-                <button class="btn-action btn-delete-multi" style="height:36px; padding:0 18px;" onclick="permanentlyDeleteSelectedInvItems()">🗑️ 선택 자재 영구 삭제</button>
+                <button class="btn-action btn-delete-multi" style="height:36px; padding:0 18px;" onclick="permanentlyDeleteSelectedInvItems()">🗑️️ 선택 자재 영구 삭제</button>
             </div>
         </div>
         <table>
@@ -1075,7 +1075,7 @@
                 saveBtn.style.cursor = 'not-allowed';
             }
         } else {
-            alert('⚠️ 비밀번호가 올바르지 않습니다.');
+            alert('⚠ 비밀번호가 올바르지 않습니다.');
             document.getElementById('sys-pass-input').value = '';
             document.getElementById('sys-pass-input').focus();
         }
@@ -1089,7 +1089,7 @@
                 document.getElementById('backup-readonly-banner').style.display = 'flex';
                 document.getElementById('banner-return-btn').style.display = 'none';
                 document.getElementById('backup-readonly-banner').querySelector('span').innerText = 
-                    '⚠️️ 현재 [읽기 전용 모드]로 접속 중입니다. (조회, 인쇄 및 PDF 출력만 가능합니다)';
+                    '⚠️ 현재 [읽기 전용 모드]로 접속 중입니다. (조회, 인쇄 및 PDF 출력만 가능합니다)';
                 const saveBtn = document.getElementById('btn_save_mat');
                 if(saveBtn) {
                     saveBtn.style.opacity = '0.5';
@@ -1332,11 +1332,9 @@
         const startDate = document.getElementById('search-start-date')?.value || '';
         const endDate = document.getElementById('search-end-date')?.value || '';
         
-        let periodText = '';
         if (isPeriodSearch && (startDate || endDate)) {
             const startFmt = startDate ? startDate.replace(/-/g, '/') : '';
             const endFmt = endDate ? endDate.replace(/-/g, '/') : '';
-            periodText = `| 검색기간: ${startFmt}~${endFmt}`;
             
             const periodRangeEl = document.getElementById('period-print-range');
             if (periodRangeEl) {
@@ -1349,7 +1347,7 @@
 
         const dateInfoEl = document.getElementById('print-date-info');
         if (dateInfoEl) {
-            dateInfoEl.innerText = `출력일자: ${todayStr()} | 담당 팀: ${currentTeam === 'ALL' ? '전체' : currentTeam} ${periodText}`;
+            dateInfoEl.innerText = `출력일자: ${todayStr()} | 담당 팀: ${currentTeam === 'ALL' ? '전체' : currentTeam}`;
         }
 
         if (shouldPrint) window.print();
@@ -1593,7 +1591,7 @@
             return;
         }
         if (inventory.some(i => i.code === code)) {
-            alert(`⚠️ 이미 존재하는 품목코드(${code})입니다. 중복된 코드는 등록할 수 없습니다.`);
+            alert(`⚠️️ 이미 존재하는 품목코드(${code})입니다. 중복된 코드는 등록할 수 없습니다.`);
             return;
         }
 
@@ -2122,7 +2120,7 @@
 
     async function editItemName(itemCode, currentName) {
         if (isReadOnlyUser) {
-            alert('⚠️️ [읽기 전용 모드]에서는 수정할 수 없습니다.');
+            alert('⚠️ [읽기 전용 모드]에서는 수정할 수 없습니다.');
             return;
         }
         if (isReadOnlyHistoryMode) {
@@ -2304,7 +2302,7 @@
 
     async function deleteHistoryItem(id) {
         if (isReadOnlyUser) {
-            alert('⚠️ [읽기 전용 모드]에서는 이력을 삭제할 수 없습니다.');
+            alert('⚠️️ [읽기 전용 모드]에서는 이력을 삭제할 수 없습니다.');
             return;
         }
         if (isReadOnlyHistoryMode) {
@@ -2338,7 +2336,7 @@
 
     async function deleteSelectedHistory() {
         if (isReadOnlyUser) {
-            alert('⚠️ [읽기 전용 모드]에서는 이력을 삭제할 수 없습니다.');
+            alert('⚠ [읽기 전용 모드]에서는 이력을 삭제할 수 없습니다.');
             return;
         }
         if (isReadOnlyHistoryMode) {
@@ -2431,7 +2429,7 @@
             return;
         }
         if (isReadOnlyHistoryMode) {
-            alert('⚠️️ 과거 백업 조회 모드에서는 복원이 차단됩니다.');
+            alert('⚠️ 과거 백업 조회 모드에서는 복원이 차단됩니다.');
             return;
         }
         const chks = document.querySelectorAll('.restore-checkbox:checked');
@@ -2724,7 +2722,7 @@
         document.getElementById('dash-warning-items').innerText = wItems.length;
         const wDiv = document.getElementById('dashboard-warnings');
         if (wItems.length > 0) {
-            wDiv.innerHTML = wItems.map(i => `<p style="margin: 6px 0; color:#b45309;">⚠️ <strong>[${esc(i.team)}] ${esc(i.name)}</strong> 부족. (현재: ${i.qty}${esc(i.unit)} / 안전: ${i.safeQty}${esc(i.unit)})</p>`).join('');
+            wDiv.innerHTML = wItems.map(i => `<p style="margin: 6px 0; color:#b45309;">⚠ <strong>[${esc(i.team)}] ${esc(i.name)}</strong> 부족. (현재: ${i.qty}${esc(i.unit)} / 안전: ${i.safeQty}${esc(i.unit)})</p>`).join('');
             wDiv.style.display = 'block';
         } else {
             wDiv.innerHTML = '<p style="margin:0; color:#15803d;">✅ 모든 재고 적정.</p>';
@@ -2828,18 +2826,6 @@
         if (endDate) filtered = filtered.filter(h => h.date <= endDate);
         if (periodType !== 'all') filtered = filtered.filter(h => h.type === periodType);
         if (keyword) filtered = filtered.filter(h => h.name.toLowerCase().includes(keyword) || h.code.toLowerCase().includes(keyword) || (h.worker && h.worker.toLowerCase().includes(keyword)));
-
-        // 인쇄용 기간 표시 업데이트
-        const periodRangeEl = document.getElementById('period-print-range');
-        if (periodRangeEl) {
-            if (startDate || endDate) {
-                const sFmt = startDate ? startDate.replace(/-/g, '/') : '';
-                const eFmt = endDate ? endDate.replace(/-/g, '/') : '';
-                periodRangeEl.textContent = `검색기간 ${sFmt}~${eFmt}`;
-            } else {
-                periodRangeEl.textContent = '';
-            }
-        }
 
         filtered.sort((a, b) => {
             let comparison;
@@ -2946,7 +2932,7 @@
             return;
         }
         if (isReadOnlyHistoryMode) {
-            alert('⚠️ 과거 백업 조회 모드에서는 삭제가 차단됩니다.');
+            alert('⚠ 과거 백업 조회 모드에서는 삭제가 차단됩니다.');
             return;
         }
         if (confirm(`[${name}] 자재와 관련된 입출고 내역을 함께 삭제하시겠습니까?`)) {
