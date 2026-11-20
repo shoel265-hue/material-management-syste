@@ -176,6 +176,12 @@
             color: white;
             cursor: pointer;
         }
+        .team-selector select:disabled {
+            background-color: #64748b;
+            color: #f1f5f9;
+            cursor: not-allowed;
+            opacity: 1;
+        }
         .btn-action {
             padding: 8px 12px;
             border-radius: 6px;
@@ -1107,6 +1113,18 @@
             currentTeam = teamParam;
             const teamSelectEl = document.getElementById('current-team-select');
             if (teamSelectEl) teamSelectEl.value = teamParam;
+
+            // 팀 로그인(?team=팀명)이면 접속 팀을 고정하고 다른 팀/총괄 선택지를 숨김
+            if (teamSelectEl && currentTeam !== 'ALL') {
+                teamSelectEl.innerHTML = '';
+                const lockedOpt = document.createElement('option');
+                lockedOpt.value = currentTeam;
+                lockedOpt.textContent = `🔒 ${currentTeam}`;
+                teamSelectEl.appendChild(lockedOpt);
+                teamSelectEl.value = currentTeam;
+                teamSelectEl.disabled = true;
+                teamSelectEl.title = '팀 로그인 중에는 접속 팀을 변경할 수 없습니다';
+            }
             
             const badgeText = currentTeam === 'ALL' ? '전체 보기' : `${currentTeam} 전용`;
             ['dash-team-badge','inv-team-badge','hist-team-badge','period-team-badge'].forEach(id => {
