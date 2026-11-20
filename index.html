@@ -683,7 +683,7 @@
                     <button class="btn-action btn-delete-multi" onclick="deleteSelectedItems()">🗑️ 선택 삭제</button>
                     <button class="btn-action btn-save" onclick="addNewItem()">➕ 목록 추가</button>
                     <button class="btn-action btn-restore" onclick="openInvRestoreModal()">↺ 삭제내역 복원</button>
-                    <button class="btn-action btn-excel-in" onclick="document.getElementById('excel-file-input').click()">📊 자재목록 엑셀 업로드</button>
+                    <button class="btn-action btn-excel-in" onclick="if (!isTeamSession()) document.getElementById('excel-file-input').click()">📊 자재목록 엑셀 업로드</button>
                     <input type="file" id="excel-file-input" style="display:none;" accept=".xlsx, .xls" onchange="importFromExcel(event)">
                     <button class="btn-action btn-excel-out" onclick="exportToExcel()">📊 현재 목록 엑셀 내보내기</button>
                 </div>
@@ -786,7 +786,7 @@
                     🔍 <input type="text" id="history-search" class="search-input" placeholder="자재명, 작업자, 품목코드로 검색..." onkeyup="renderHistory()">
                     <button class="btn-action btn-delete-multi" onclick="deleteSelectedHistory()">🗑️ 선택 삭제</button>
                     <button class="btn-action btn-restore" onclick="openRestoreModal()">↺ 삭제내역 복원</button>
-                    <button class="btn-action btn-excel-in" onclick="document.getElementById('history-excel-file-input').click()">📊 자재 리스트 엑셀 업로드</button>
+                    <button class="btn-action btn-excel-in" onclick="if (!isTeamSession()) document.getElementById('history-excel-file-input').click()">📊 자재 리스트 엑셀 업로드</button>
                     <input type="file" id="history-excel-file-input" style="display:none;" accept=".xlsx, .xls" onchange="importHistoryFromExcel(event)">
                     <button class="btn-action btn-excel-out" onclick="exportHistoryToExcel()">📊 입출고 내역 엑셀 내보내기</button>
                 </div>
@@ -1598,11 +1598,13 @@
         const unitInput = prompt("단위를 입력하세요 (예: 개, kg, L, 봉, m):", "개");
         if (unitInput === null) return;
         const unit = unitInput.trim() || "개";
-        const qtyInput = prompt(`현재 재고 수량을 입력하세요 (${isUnitIntegerOnly(unit) ? '개/EA 단위는 정수만 입력 가능' : '소수점 입력 가능'}):`, "0");
-        if (qtyInput === null) return;
         const isNumInput = (v) => /^\d+(\.\d+)?$/.test(String(v).trim().replace(/,/g, ''));
-        if (!isNumInput(qtyInput)) { alert('재고 수량은 0 이상의 숫자로 입력해 주세요.'); return; }
-        const qty = parseQuantityByUnit(qtyInput, unit);
+        const qtyInput = prompt(`현재 재고 수량을 입력하세요 (목록 추가 시 0으로만 등록 가능):`, "0");
+        if (qtyInput === null) return;
+        if (!isNumInput(qtyInput) || Number(String(qtyInput).trim().replace(/,/g, '')) !== 0) {
+            alert('⚠️ 목록 추가 시 현재 재고는 0으로만 등록할 수 있습니다.\n초기 재고는 입고로 등록해 주세요.\n(현재 재고는 0으로 등록됩니다)');
+        }
+        const qty = 0; // 목록 추가 시 재고 수량은 0으로 고정 (초기 재고는 입고로 등록)
 
         const safeQtyInput = prompt("안전 재고 수량을 입력하세요:", "5");
         if (safeQtyInput === null) return;
@@ -1611,19 +1613,18 @@
 
         inventory.push({ team, code, name: name.trim(), unit: unit.trim(), qty, safeQty });
 
-        if (qty > 0) {
-            historyLogs.push({
-                id: 'hist_' + Date.now() + '_' + Math.floor(Math.random() * 10000),
-                date: todayStr(),
-                team: team,
-                type: 'current',
-                code: code,
-                name: name.trim(),
-                qty: qty,
-                unit: unit.trim(),
-                worker: '신규 자재 직접 등록'
-            });
-        }
+        // 목록 추가 시에도 현재재고 이력을 남겨, '현재재고' 조회에서 새 항목이 보이도록 함
+        historyLogs.push({
+            id: 'hist_' + Date.now() + '_' + Math.floor(Math.random() * 10000),
+            date: todayStr(),
+            team: team,
+            type: 'current',
+            code: code,
+            name: name.trim(),
+            qty: qty,
+            unit: unit.trim(),
+            worker: '신규 자재 목록추가 수량 0'
+        });
 
         await saveData();
         renderApp();
@@ -1694,6 +1695,8 @@
                 let updatedCount = 0;
                 let qtyUpdatedCount = 0;
                 let renamedCount = 0;
+                let qtySkippedCount = 0;
+                const teamUpload = isTeamSession();
                 const hasQtyCol = ['현재재고', '재고현황', '재고', '수량'].some(k => headers.includes(k));
                 let todayDate = todayStr();
                 let sessionUsedCodes = new Set();
@@ -1747,7 +1750,9 @@
                         inventory[existingIndex].name = name;
                         inventory[existingIndex].unit = unit;
                         if (safeGiven) inventory[existingIndex].safeQty = safeQty;
-                        if (hasQtyCol && qtyGiven && inventory[existingIndex].qty !== qty) {
+                        if (teamUpload && hasQtyCol && qtyGiven && inventory[existingIndex].qty !== qty) {
+                            qtySkippedCount++;
+                        } else if (hasQtyCol && qtyGiven && inventory[existingIndex].qty !== qty) {
                             inventory[existingIndex].qty = qty;
                             qtyUpdatedCount++;
                             if (qty > 0 && !historyLogs.some(h => h.code === code && h.type === 'current')) {
@@ -1756,8 +1761,10 @@
                         }
                         updatedCount++;
                     } else {
-                        inventory.push({ team, code, name, unit, qty, safeQty });
-                        if (qty > 0) {
+                        const newQty = teamUpload ? 0 : qty;
+                        if (teamUpload && qty > 0) qtySkippedCount++;
+                        inventory.push({ team, code, name, unit, qty: newQty, safeQty });
+                        if (newQty > 0) {
                             const newLog = { id: 'hist_' + Date.now() + '_' + Math.floor(Math.random() * 10000), date: todayDate, team: team, type: 'current', code: code, name: name, qty: qty, unit: unit, worker: '엑셀 등록 현재재고' };
                             const logKey = `${newLog.date}_${newLog.team}_${newLog.type}_${newLog.code}_${newLog.qty}_${newLog.worker}`;
                             if (!historyLogs.some(h => `${h.date}_${h.team}_${h.type}_${h.code}_${h.qty}_${h.worker || ''}` === logKey)) {
@@ -1768,7 +1775,7 @@
                     }
                 }
                 await saveData();
-                alert(`📊 자재 목록 엑셀 업로드 완료!\n* [${defaultTeam}] 소속으로 등록/연동 완료.\n- 신규 등록: ${addedCount}건\n- 업데이트: ${updatedCount}건 (재고 수량 반영: ${qtyUpdatedCount}건)${renamedCount ? `\n- 삭제 보관함 코드와 겹쳐 새 코드 부여: ${renamedCount}건` : ''}`);
+                alert(`📊 자재 목록 엑셀 업로드 완료!\n* [${defaultTeam}] 소속으로 등록/연동 완료.\n- 신규 등록: ${addedCount}건\n- 업데이트: ${updatedCount}건 (재고 수량 반영: ${qtyUpdatedCount}건)${renamedCount ? `\n- 삭제 보관함 코드와 겹쳐 새 코드 부여: ${renamedCount}건` : ''}${qtySkippedCount ? `\n- 🔒 팀 접속으로 수량 반영 제외: ${qtySkippedCount}건 (관리자에게 문의)` : ''}`);
                 renderApp(); event.target.value = '';
             } catch (err) {
                 event.target.value = '';
@@ -2079,6 +2086,12 @@
         renderApp();
     }
 
+    function isTeamSession() {
+        const urlTeam = new URLSearchParams(window.location.search).get('team');
+        const hasTeamInUrl = urlTeam !== null && urlTeam.trim() !== '' && urlTeam.trim() !== 'ALL';
+        return hasTeamInUrl || currentTeam !== 'ALL';
+    }
+
     async function editItemCode(oldCode) {
         if (isReadOnlyUser) {
             alert('⚠️ [읽기 전용 모드]에서는 수정할 수 없습니다.');
@@ -2207,6 +2220,17 @@
         const targetItem = inventory.find(i => i.code === oldCode);
         const itemUnit = targetItem ? targetItem.unit : (log.unit || '개');
 
+        // 팀 접속 + 현재재고 행: 일시·구분·품목코드·자재명·수량은 고정, 작업자/비고만 수정 가능
+        if (isTeamSession() && oldType === 'current') {
+            const lockedWorker = prompt("작업자/비고 내용을 입력하세요:", log.worker || '');
+            if (lockedWorker === null) return;
+            log.worker = lockedWorker.trim();
+            await saveData();
+            renderApp();
+            alert("✅ 작업자/비고가 수정되었습니다.\n(일시·구분·품목코드·자재명·수량은 관리자만 수정 가능합니다)");
+            return;
+        }
+
         const newDate = prompt("일시를 입력하세요 (YYYY-MM-DD):", log.date);
         if (newDate === null) return;
         if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate.trim())) { alert("일시는 YYYY-MM-DD 형식으로 입력해 주세요."); return; }
@@ -2228,27 +2252,41 @@
             alert("구분은 [입고], [출고], [현재재고] 중 하나로 입력해주세요.");
             return;
         }
-
-        const newCode = prompt("품목코드를 입력하세요:", log.code);
-        if (newCode === null) return;
-        if (!newCode.trim()) { alert("품목코드는 필수 항목입니다."); return; }
-
-        const newName = prompt("자재명을 입력하세요:", log.name);
-        if (newName === null) return;
-        if (!newName.trim()) { alert("자재명은 필수 항목입니다."); return; }
-
-        const newQtyInput = prompt(`수량을 입력하세요 (${isUnitIntegerOnly(itemUnit) ? '정수만 입력 가능' : '소수점 가능'}):`, log.qty);
-        if (newQtyInput === null) return;
-
-        if (isUnitIntegerOnly(itemUnit) && newQtyInput.includes('.')) {
-            alert(`⚠️ '${itemUnit}' 단위는 소수점으로 수정할 수 없습니다.`);
+        if (isTeamSession() && (oldType === 'current' || newType === 'current') && newType !== oldType) {
+            alert('🔒 팀 접속에서는 [현재재고]와 입고/출고 구분을 서로 바꿀 수 없습니다.');
             return;
         }
 
-        const newQty = parseQuantityByUnit(newQtyInput, itemUnit);
-        if (isNaN(newQty) || newQty < 0) {
-            alert("수량은 0 이상의 숫자이어야 합니다.");
-            return;
+        let newCode = log.code;
+        let newName = log.name;
+        if (!isTeamSession()) {
+            newCode = prompt("품목코드를 입력하세요:", log.code);
+            if (newCode === null) return;
+            if (!newCode.trim()) { alert("품목코드는 필수 항목입니다."); return; }
+
+            newName = prompt("자재명을 입력하세요:", log.name);
+            if (newName === null) return;
+            if (!newName.trim()) { alert("자재명은 필수 항목입니다."); return; }
+        }
+
+        let newQty = oldQty;
+        if (isTeamSession() && oldType === 'current') {
+            // 팀 접속 + 현재재고 행: 수량은 수정 불가 (관리자 문의), 기존 수량 유지
+            alert(`🔒 현재재고 수량은 관리자에게 문의하세요. (현재 수량 ${oldQty} 유지)`);
+        } else {
+            const newQtyInput = prompt(`수량을 입력하세요 (${isUnitIntegerOnly(itemUnit) ? '정수만 입력 가능' : '소수점 가능'}):`, log.qty);
+            if (newQtyInput === null) return;
+
+            if (isUnitIntegerOnly(itemUnit) && newQtyInput.includes('.')) {
+                alert(`⚠️ '${itemUnit}' 단위는 소수점으로 수정할 수 없습니다.`);
+                return;
+            }
+
+            newQty = parseQuantityByUnit(newQtyInput, itemUnit);
+            if (isNaN(newQty) || newQty < 0) {
+                alert("수량은 0 이상의 숫자이어야 합니다.");
+                return;
+            }
         }
 
         const newWorker = prompt("작업자/비고 내용을 입력하세요:", log.worker || '');
@@ -2293,6 +2331,129 @@
         alert("✅ 입출고 내역이 안전하게 수정되었습니다.");
     }
 
+    // 재고 반영 헬퍼
+    function reverseStockEffect(q, type, qty) {
+        if (type === 'in') return q - qty;
+        if (type === 'out') return q + qty;
+        return q;
+    }
+    function applyStockEffect(q, type, qty) {
+        if (type === 'in') return q + qty;
+        if (type === 'out') return q - qty;
+        return qty;
+    }
+    function roundQty(q) {
+        if (q < 0) q = 0;
+        return Math.round(q * 1000) / 1000;
+    }
+
+    // 입출고 내역 항목별 수정 (일시/구분/품목코드/자재명/수량/작업자·비고)
+    async function editHistoryField(id, field) {
+        if (isReadOnlyUser) {
+            alert('⚠️ [읽기 전용 모드]에서는 수정할 수 없습니다.');
+            return;
+        }
+        if (isReadOnlyHistoryMode) {
+            alert('⚠️ 과거 백업 조회 모드에서는 수정이 차단됩니다.');
+            return;
+        }
+        const log = historyLogs.find(h => h.id === id);
+        if (!log) return;
+
+        const teamView = isTeamSession();
+        const allowed = teamView
+            ? (log.type === 'current' ? ['date', 'worker'] : ['date', 'type', 'qty', 'worker'])
+            : ['date', 'type', 'code', 'name', 'qty', 'worker'];
+        if (!allowed.includes(field)) return;
+
+        const oldType = log.type;
+        const oldQty = log.qty;
+        const oldCode = log.code;
+        const targetItem = inventory.find(i => i.code === oldCode);
+        const itemUnit = targetItem ? targetItem.unit : (log.unit || '개');
+
+        let newDate = log.date;
+        let newType = oldType;
+        let newCode = oldCode;
+        let newName = log.name;
+        let newQty = oldQty;
+        let newWorker = log.worker || '';
+
+        if (field === 'date') {
+            const v = prompt("일시를 입력하세요 (YYYY-MM-DD):", log.date);
+            if (v === null) return;
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(v.trim())) { alert("일시는 YYYY-MM-DD 형식으로 입력해 주세요."); return; }
+            newDate = v.trim();
+        } else if (field === 'type') {
+            const typeStr = oldType === 'in' ? '입고' : (oldType === 'out' ? '출고' : '현재재고');
+            const v = prompt("구분을 입력하세요 (입고 / 출고 / 현재재고):", typeStr);
+            if (v === null) return;
+            const c = v.trim();
+            if (c === '입고' || c.toLowerCase() === 'in') newType = 'in';
+            else if (c === '출고' || c.toLowerCase() === 'out') newType = 'out';
+            else if (c === '현재재고' || c.toLowerCase() === 'current') newType = 'current';
+            else { alert("구분은 [입고], [출고], [현재재고] 중 하나로 입력해주세요."); return; }
+            if (teamView && (oldType === 'current' || newType === 'current') && newType !== oldType) {
+                alert('🔒 팀 접속에서는 [현재재고]와 입고/출고 구분을 서로 바꿀 수 없습니다.');
+                return;
+            }
+        } else if (field === 'code') {
+            const v = prompt("품목코드를 입력하세요:", log.code);
+            if (v === null) return;
+            if (!v.trim()) { alert("품목코드는 필수 항목입니다."); return; }
+            newCode = v.trim();
+            if (!inventory.some(i => i.code === newCode)) { alert("등록된 품목코드가 아닙니다."); return; }
+        } else if (field === 'name') {
+            const v = prompt("자재명을 입력하세요:", log.name);
+            if (v === null) return;
+            if (!v.trim()) { alert("자재명은 필수 항목입니다."); return; }
+            newName = v.trim();
+        } else if (field === 'qty') {
+            const v = prompt(`수량을 입력하세요 (${isUnitIntegerOnly(itemUnit) ? '정수만 입력 가능' : '소수점 가능'}):`, log.qty);
+            if (v === null) return;
+            if (isUnitIntegerOnly(itemUnit) && v.includes('.')) {
+                alert(`⚠️ '${itemUnit}' 단위는 소수점으로 수정할 수 없습니다.`);
+                return;
+            }
+            newQty = parseQuantityByUnit(v, itemUnit);
+            if (isNaN(newQty) || newQty < 0) { alert("수량은 0 이상의 숫자이어야 합니다."); return; }
+        } else if (field === 'worker') {
+            const v = prompt("작업자/비고 내용을 입력하세요:", log.worker || '');
+            if (v === null) return;
+            newWorker = v.trim();
+        } else {
+            return;
+        }
+
+        // 재고 반영
+        if (newCode !== oldCode) {
+            const oldInv = inventory.find(i => i.code === oldCode);
+            if (oldInv && oldType !== 'current') oldInv.qty = roundQty(reverseStockEffect(oldInv.qty, oldType, oldQty));
+            const newInv = inventory.find(i => i.code === newCode);
+            if (newInv) newInv.qty = roundQty(applyStockEffect(newInv.qty, newType, newQty));
+        } else {
+            const inv = inventory.find(i => i.code === oldCode);
+            if (inv) {
+                let q = inv.qty;
+                if (oldType !== 'current') q = reverseStockEffect(q, oldType, oldQty);
+                q = applyStockEffect(q, newType, newQty);
+                inv.qty = roundQty(q);
+                if (field === 'name') inv.name = newName;
+            }
+        }
+
+        log.date = newDate;
+        log.type = newType;
+        log.code = newCode;
+        log.name = newName;
+        log.qty = newQty;
+        log.worker = newWorker;
+
+        await saveData();
+        renderApp();
+        alert("✅ 수정되었습니다.");
+    }
+
     function clearHistoryFilter() {
         selectedHistoryCode = null;
         document.getElementById('history-specific-container').style.display = 'none';
@@ -2301,6 +2462,7 @@
     }
 
     async function deleteHistoryItem(id) {
+        if (isTeamSession()) return; // 팀 접속: 입출고 내역 삭제 불가
         if (isReadOnlyUser) {
             alert('⚠️️ [읽기 전용 모드]에서는 이력을 삭제할 수 없습니다.');
             return;
@@ -2335,6 +2497,7 @@
     }
 
     async function deleteSelectedHistory() {
+        if (isTeamSession()) return; // 팀 접속: 입출고 내역 삭제 불가
         if (isReadOnlyUser) {
             alert('⚠ [읽기 전용 모드]에서는 이력을 삭제할 수 없습니다.');
             return;
@@ -2470,6 +2633,7 @@
     }
 
     async function permanentlyDeleteSelectedHistory() {
+        if (isTeamSession()) return; // 팀 접속: 영구 삭제 불가
         if (isReadOnlyUser) {
             alert('⚠️ [읽기 전용 모드]에서는 영구 삭제할 수 없습니다.');
             return;
@@ -2581,6 +2745,7 @@
     }
 
     async function permanentlyDeleteSelectedInvItems() {
+        if (isTeamSession()) return; // 팀 접속: 영구 삭제 불가
         if (isReadOnlyUser) {
             alert('⚠️ [읽기 전용 모드]에서는 영구 삭제할 수 없습니다.');
             return;
@@ -2788,15 +2953,23 @@
 
             const checkboxHtml = `<input type="checkbox" class="row-checkbox history-checkbox" value="${h.id}">`;
 
+            // 항목별 수정 버튼: 관리자는 전체, 팀 접속은 현재재고(일시·작업자/비고), 입고/출고(일시·구분·수량·작업자/비고)
+            const allowedFields = !isTeamSession()
+                ? ['date', 'type', 'code', 'name', 'qty', 'worker']
+                : (h.type === 'current' ? ['date', 'worker'] : ['date', 'type', 'qty', 'worker']);
+            const fieldBtn = (f) => allowedFields.includes(f)
+                ? ` <button onclick="editHistoryField('${jsAttr(h.id)}', '${f}')" title="수정" style="padding: 2px 6px; font-size: 11px; background-color: #64748b; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 4px;">수정</button>`
+                : '';
+
             tr.innerHTML = `
                 <td class="checkbox-cell">${checkboxHtml}</td>
-                <td>${esc(h.date)}</td>
+                <td style="white-space: nowrap;">${esc(h.date)}</td>
                 <td><strong>${esc(h.team)}</strong></td>
-                <td>${badge}</td>
-                <td>${esc(h.code)}</td>
-                <td style="text-align:left; font-weight:bold;">${esc(h.name)}</td>
-                <td>${h.qty} ${esc(h.unit || '')}</td>
-                <td style="text-align:left;">${esc(h.worker || '-')}</td>
+                <td style="white-space: nowrap;">${badge}</td>
+                <td style="white-space: nowrap;">${esc(h.code)}</td>
+                <td style="text-align:left; font-weight:bold; white-space: nowrap;">${esc(h.name)}</td>
+                <td style="white-space: nowrap;">${h.qty} ${esc(h.unit || '')}</td>
+                <td style="text-align:left; white-space: nowrap;">${esc(h.worker || '-')}</td>
                 <td class="col-action" style="white-space: nowrap;">${actionBtnsHtml}</td>
             `;
             tbody.appendChild(tr);
